@@ -1,0 +1,257 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidNumberRange(val, minVal, maxVal) {
+      return val is number && val >= minVal && val <= maxVal;
+    }
+
+    function isNullableNumberRange(val, minVal, maxVal) {
+      return val == null || isValidNumberRange(val, minVal, maxVal);
+    }
+
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll(['ownerId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBillingSettings(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'prevTotal',
+          'prev201',
+          'prev202',
+          'accountInfo',
+          'seededBase',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'prevTotal',
+          'prev201',
+          'prev202',
+          'accountInfo',
+          'seededBase',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidNumberRange(data.prevTotal, 0, 999999)
+        && isValidNumberRange(data.prev201, 0, 999999)
+        && isValidNumberRange(data.prev202, 0, 999999)
+        && data.accountInfo is string
+        && data.accountInfo.size() <= 120
+        && data.seededBase is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBillingRecord(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'ym',
+          'monthLabel',
+          'billAmount',
+          'billUsage',
+          'usageTotal',
+          'usage201',
+          'usage202',
+          'usageShop',
+          'adjustmentTarget',
+          'addedAmount',
+          'finalAmtSum',
+          'currTotal',
+          'curr201',
+          'curr202',
+          'isBaseRecord',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'ym',
+          'monthLabel',
+          'billAmount',
+          'billUsage',
+          'usageTotal',
+          'usage201',
+          'usage202',
+          'usageShop',
+          'adjustmentTarget',
+          'addedAmount',
+          'finalAmtSum',
+          'currTotal',
+          'curr201',
+          'curr202',
+          'isBaseRecord',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.ym is string
+        && data.ym.size() == 7
+        && data.ym.matches('^[0-9]{4}-[0-9]{2}$')
+        && data.monthLabel is string
+        && data.monthLabel.size() <= 40
+        && isNullableNumberRange(data.billAmount, 0, 10000000)
+        && isNullableNumberRange(data.billUsage, 0, 100000)
+        && isValidNumberRange(data.usageTotal, -1000, 100000)
+        && isValidNumberRange(data.usage201, -1000, 100000)
+        && isValidNumberRange(data.usage202, -1000, 100000)
+        && isValidNumberRange(data.usageShop, -1000, 100000)
+        && (
+          data.adjustmentTarget == null
+          || (
+            data.adjustmentTarget is string
+            && data.adjustmentTarget.size() <= 10
+            && data.adjustmentTarget in ['201호', '202호', '상가']
+          )
+        )
+        && isNullableNumberRange(data.addedAmount, 0, 10000000)
+        && isNullableNumberRange(data.finalAmtSum, 0, 10000000)
+        && isNullableNumberRange(data.currTotal, 0, 999999)
+        && isNullableNumberRange(data.curr201, 0, 999999)
+        && isNullableNumberRange(data.curr202, 0, 999999)
+        && data.isBaseRecord is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt']);
+      allow delete: if false;
+
+      match /settings/{settingId} {
+        allow get: if isValidId(userId)
+          && settingId == 'main'
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow list: if false;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && settingId == 'main'
+          && isValidBillingSettings(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && settingId == 'main'
+          && isValidBillingSettings(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['prevTotal', 'prev201', 'prev202', 'accountInfo', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['prevTotal', 'prev201', 'prev202', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['accountInfo', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['seededBase', 'updatedAt'])
+          );
+        allow delete: if false;
+      }
+
+      match /records/{recordId} {
+        allow get: if isValidId(userId)
+          && isValidId(recordId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow list: if isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(recordId)
+          && isValidBillingRecord(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && existsAfter(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(recordId)
+          && isValidBillingRecord(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'ym',
+            'monthLabel',
+            'billAmount',
+            'billUsage',
+            'usageTotal',
+            'usage201',
+            'usage202',
+            'usageShop',
+            'adjustmentTarget',
+            'addedAmount',
+            'finalAmtSum',
+            'currTotal',
+            'curr201',
+            'curr202',
+            'isBaseRecord',
+            'updatedAt'
+          ]);
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(recordId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+  }
+}

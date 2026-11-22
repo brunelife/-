@@ -1,0 +1,203 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Non-PII root ownership anchor document for a landlord account to enforce relational subcollection access.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the account owner"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when account record was initialized"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when account record was last updated"
+        }
+      },
+      "required": ["ownerId", "createdAt", "updatedAt"]
+    },
+    "BillingSettings": {
+      "title": "BillingSettings",
+      "description": "Persistent previous-month water meter baselines and bank transfer details for the landlord.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the settings owner"
+        },
+        "prevTotal": {
+          "type": "number",
+          "description": "Previous month building total water meter reading"
+        },
+        "prev201": {
+          "type": "number",
+          "description": "Previous month Unit 201 water meter reading"
+        },
+        "prev202": {
+          "type": "number",
+          "description": "Previous month Unit 202 water meter reading"
+        },
+        "accountInfo": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Bank account instructions included in tenant SMS messages"
+        },
+        "seededBase": {
+          "type": "boolean",
+          "description": "Whether the initial 2021-2024 baseline records have been seeded"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": [
+        "ownerId",
+        "prevTotal",
+        "prev201",
+        "prev202",
+        "accountInfo",
+        "seededBase",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BillingRecord": {
+      "title": "BillingRecord",
+      "description": "Monthly water utility settlement record stored in the cumulative audit ledger.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the record owner"
+        },
+        "ym": {
+          "type": "string",
+          "maxLength": 7,
+          "pattern": "^[0-9]{4}-[0-9]{2}$",
+          "description": "Billing year-month in YYYY-MM format"
+        },
+        "monthLabel": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Display label for billing month"
+        },
+        "billAmount": {
+          "type": "number",
+          "description": "Total billed amount in KRW (nullable for incomplete historical entries)"
+        },
+        "billUsage": {
+          "type": "number",
+          "description": "Total billed water usage in cubic meters (nullable)"
+        },
+        "usageTotal": {
+          "type": "number",
+          "description": "Measured building total usage in cubic meters"
+        },
+        "usage201": {
+          "type": "number",
+          "description": "Measured Unit 201 usage in cubic meters"
+        },
+        "usage202": {
+          "type": "number",
+          "description": "Measured Unit 202 usage in cubic meters"
+        },
+        "usageShop": {
+          "type": "number",
+          "description": "Calculated commercial shop usage in cubic meters"
+        },
+        "adjustmentTarget": {
+          "type": "string",
+          "enum": ["201호", "202호", "상가"],
+          "description": "Unit assigned the 500-KRW rounding shortfall based on cumulative std deviation (nullable)"
+        },
+        "addedAmount": {
+          "type": "number",
+          "description": "Rounding shortfall adjustment added in KRW (nullable)"
+        },
+        "finalAmtSum": {
+          "type": "number",
+          "description": "Final total collected across all units in KRW (nullable)"
+        },
+        "currTotal": {
+          "type": "number",
+          "description": "Current building total meter reading (nullable for legacy records)"
+        },
+        "curr201": {
+          "type": "number",
+          "description": "Current Unit 201 meter reading (nullable for legacy records)"
+        },
+        "curr202": {
+          "type": "number",
+          "description": "Current Unit 202 meter reading (nullable for legacy records)"
+        },
+        "isBaseRecord": {
+          "type": "boolean",
+          "description": "True for initial 2021-2024 historical ledger rows"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": [
+        "ownerId",
+        "ym",
+        "monthLabel",
+        "billAmount",
+        "billUsage",
+        "usageTotal",
+        "usage201",
+        "usage202",
+        "usageShop",
+        "adjustmentTarget",
+        "addedAmount",
+        "finalAmtSum",
+        "currTotal",
+        "curr201",
+        "curr202",
+        "isBaseRecord",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Root non-PII anchor document for each authenticated user."
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/BillingSettings" },
+      "description": "User's persistent previous-month meter baselines and bank transfer account details (document id: main)."
+    },
+    "/users/{userId}/records/{recordId}": {
+      "schema": { "$ref": "#/entities/BillingRecord" },
+      "description": "User's cumulative monthly water utility settlement records."
+    }
+  }
+}

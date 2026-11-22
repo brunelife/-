@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>수도세 간편 정산 (사진 자동 인식 + 눈검수)</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --card: #ffffff;
+      --text: #1b2430;
+      --muted: #5c6b7c;
+      --primary: #155eef;
+      --primary-dark: #1048b8;
+      --accent-bg: #eef4ff;
+      --border: #d7e0ea;
+      --success: #067647;
+      --success-bg: #ecfdf3;
+      --warn-bg: #fffaeb;
+      --warn-text: #93370d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 680px; margin: 0 auto; }
+    header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+    }
+    h1 { margin: 0 0 6px 0; font-size: 23px; font-weight: 800; }
+    .sub { color: var(--muted); font-size: 15px; margin: 0; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+    .tab-btn {
+      flex: 1; padding: 14px 12px; font-size: 17px; font-weight: 700;
+      border-radius: 12px; border: 1px solid var(--border);
+      background: var(--card); color: var(--text); cursor: pointer;
+    }
+    .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 18px 20px; margin-bottom: 14px;
+    }
+    .section-title { font-size: 20px; font-weight: 800; margin: 0 0 12px 0; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 540px) { .grid-2 { grid-template-columns: 1fr; } }
+    .field { margin-bottom: 12px; }
+    label { display: block; font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    input[type="number"], input[type="text"] {
+      width: 100%; padding: 12px 14px; font-size: 21px; font-weight: 800;
+      border: 2px solid var(--border); border-radius: 12px;
+      background: #fcfdff; color: var(--text);
+    }
+    input.auto-filled {
+      border-color: #155eef;
+      background: #f0f6ff;
+    }
+    input:focus { outline: none; border-color: var(--primary); background: #fff; }
+    .photo-box {
+      border: 1.5px dashed var(--border); border-radius: 12px;
+      padding: 12px; background: #fafbfd;
+    }
+    .photo-box input[type="file"] { font-size: 15px; width: 100%; }
+    .ocr-status {
+      margin-top: 6px; font-size: 14px; font-weight: 700; color: var(--primary);
+    }
+    .photo-preview {
+      margin-top: 8px; max-height: 140px; border-radius: 8px;
+      display: none; object-fit: cover; width: 100%;
+    }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .btn-secondary {
+      padding: 10px 14px; font-size: 15px; font-weight: 700;
+      background: #eef4ff; color: var(--primary);
+      border: 1px solid #b2ccff; border-radius: 10px; cursor: pointer;
+    }
+    .btn-save {
+      width: 100%; padding: 14px; font-size: 18px; font-weight: 800;
+      background: var(--success); color: #fff;
+      border: none; border-radius: 12px; cursor: pointer; margin-top: 6px;
+    }
+    .unit-card {
+      border: 1.5px solid var(--border); border-radius: 14px;
+      padding: 16px; margin-bottom: 12px; background: #fff;
+    }
+    .unit-header {
+      display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;
+    }
+    .unit-name { font-size: 21px; font-weight: 800; }
+    .unit-amount { font-size: 24px; font-weight: 900; color: var(--primary); }
+    .msg-box {
+      width: 100%; min-height: 92px; font-size: 16px; line-height: 1.45;
+      padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--accent-bg); color: var(--text); margin-bottom: 8px; resize: vertical;
+    }
+    .btn-copy {
+      width: 100%; padding: 12px; font-size: 17px; font-weight: 800;
+      background: #1d2939; color: #fff; border: none; border-radius: 10px; cursor: pointer;
+    }
+    .btn-copy.copied { background: var(--success); }
+    .info-banner {
+      background: var(--warn-bg); color: var(--warn-text);
+      border: 1px solid #fedf89; border-radius: 12px;
+      padding: 12px 14px; font-size: 15px; margin-bottom: 12px;
+    }
+    .summary-bar {
+      background: var(--success-bg); border: 1px solid #a6f4c5;
+      border-radius: 12px; padding: 12px 14px; font-size: 16px; margin-bottom: 12px;
+    }
+    .badge-hint {
+      display: inline-block; font-size: 13px; font-weight: 700;
+      background: #eef4ff; color: var(--primary);
+      padding: 2px 8px; border-radius: 6px; margin-left: 6px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 8px 6px; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { background: #f2f5f9; font-weight: 800; }
+    .table-scroll { overflow-x: auto; max-height: 380px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>매월 5일 수도세 간편 정산</h1>
+      <p class="sub">사진 올리면 자동 채움 → 큰 글씨 확인·수정 → 입주별 개별 문자 복사</p>
+    </header>
+
+    <div class="tabs">
+      <button id="tabSimpleBtn" class="tab-btn active" onclick="switchTab('simple')">정산 및 문자 복사</button>
+      <button id="tabVerifyBtn" class="tab-btn" onclick="switchTab('verify')">검증 및 누적 DB</button>
+    </div>
+
+    <div id="simpleTab">
+      <div class="card">
+        <div class="section-title">1. 사진 올리기 (자동 숫자 인식)</div>
+        <p class="sub" style="margin-bottom:12px;">사진을 올리면 숫자를 자동으로 읽어 아래 칸에 채워줍니다. 인식이 어긋난 숫자만 터치해서 고치세요.</p>
+        <div class="grid-2">
+          <div class="photo-box">
+            <label>201호 계량기 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="handleImageUpload(this, 'prev201', 'status201', 'meter201')" />
+            <div id="status201" class="ocr-status"></div>
+            <img id="prev201" class="photo-preview" alt="201호 미리보기" />
+          </div>
+          <div class="photo-box">
+            <label>202호 계량기 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="handleImageUpload(this, 'prev202', 'status202', 'meter202')" />
+            <div id="status202" class="ocr-status"></div>
+            <img id="prev202" class="photo-preview" alt="202호 미리보기" />
+          </div>
+          <div class="photo-box">
+            <label>건물 전체 계량기 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="handleImageUpload(this, 'prevTot', 'statusTot', 'meterTot')" />
+            <div id="statusTot" class="ocr-status"></div>
+            <img id="prevTot" class="photo-preview" alt="건물 전체 미리보기" />
+          </div>
+          <div class="photo-box">
+            <label>수도세 고지서 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="handleImageUpload(this, 'prevBill', 'statusBill', 'bill')" />
+            <div id="statusBill" class="ocr-status"></div>
+            <img id="prevBill" class="photo-preview" alt="고지서 미리보기" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">2. 자동 채움 확인 및 수정 <span class="badge-hint">파란 테두리 = 자동 인식됨</span></div>
+        <div class="field">
+          <label for="monthLabel">청구 월 표시</label>
+          <input type="text" id="monthLabel" value="이번 달" oninput="calculateNow()" />
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="billAmount">고지서 금액 (원)</label>
+            <input type="number" id="billAmount" placeholder="예: 56060" oninput="clearAutoStyle(this); calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="billUsage">고지서 사용량 (㎥)</label>
+            <input type="number" step="0.1" id="billUsage" placeholder="예: 22" oninput="clearAutoStyle(this); calculateNow()" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="prevTotal">전월 건물 전체 계량기</label>
+            <input type="number" step="0.1" id="prevTotal" value="2276" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="currTotal">당월 건물 전체 계량기</label>
+            <input type="number" step="0.1" id="currTotal" placeholder="자동 채움 또는 직접 입력" oninput="clearAutoStyle(this); calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="prev201">전월 201호 계량기</label>
+            <input type="number" step="0.1" id="prev201" value="700" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="curr201">당월 201호 계량기</label>
+            <input type="number" step="0.1" id="curr201" placeholder="자동 채움 또는 직접 입력" oninput="clearAutoStyle(this); calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="prev202">전월 202호 계량기</label>
+            <input type="number" step="0.1" id="prev202" value="1008" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="curr202">당월 202호 계량기</label>
+            <input type="number" step="0.1" id="curr202" placeholder="자동 채움 또는 직접 입력" oninput="clearAutoStyle(this); calculateNow()" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="accountInfo">입금 계좌 안내</label>
+          <input type="text" id="accountInfo" value="538401-04-084962 국민 김영근" oninput="calculateNow()" />
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">3. 입주별 정산 및 개별 문자 복사</div>
+        <div id="warnBox" class="info-banner hidden"></div>
+        <div id="summaryBox" class="summary-bar">사진을 올리거나 숫자를 입력하면 자동으로 계산됩니다.</div>
+
+        <div class="unit-card">
+          <div class="unit-header">
+            <span class="unit-name">201호 (<span id="u201Label">0</span>㎥)</span>
+            <span class="unit-amount" id="a201Label">0원</span>
+          </div>
+          <textarea id="msg201" class="msg-box"></textarea>
+          <button class="btn-copy" onclick="copyText('msg201', this)">201호 안내 문구 복사</button>
+        </div>
+
+        <div class="unit-card">
+          <div class="unit-header">
+            <span class="unit-name">202호 (<span id="u202Label">0</span>㎥)</span>
+            <span class="unit-amount" id="a202Label">0원</span>
+          </div>
+          <textarea id="msg202" class="msg-box"></textarea>
+          <button class="btn-copy" onclick="copyText('msg202', this)">202호 안내 문구 복사</button>
+        </div>
+
+        <div class="unit-card">
+          <div class="unit-header">
+            <span class="unit-name">상가 (<span id="uShopLabel">0</span>㎥)</span>
+            <span class="unit-amount" id="aShopLabel">0원</span>
+          </div>
+          <textarea id="msgShop" class="msg-box"></textarea>
+          <button class="btn-copy" onclick="copyText('msgShop', this)">상가 정산 문구 복사</button>
+        </div>
+
+        <button class="btn-save" onclick="saveCurrentToDB()">이번 달 정산 기록 누적 DB에 저장 (다음 달 전월값 자동 이어받기)</button>
+      </div>
+    </div>
+
+    <div id="verifyTab" class="hidden">
+      <div class="card">
+        <div class="section-title">누적 표준편차 보정 대상 검증</div>
+        <div id="stdSummary" class="summary-bar"></div>
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="downloadJson()">누적 DB (JSON) 내려받기</button>
+          <button class="btn-secondary" onclick="resetLocalDB()">초기 장부 상태로 되돌리기</button>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>연월</th>
+                <th>고지서</th>
+                <th>201/202/상가(㎥)</th>
+                <th>보정대상</th>
+                <th>가산액</th>
+                <th>최종합계</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const BASE_RECORDS = [{"ym": "2021-05", "bill_amount": 77070, "bill_usage": null, "usage_total": 29.0, "usage_201": 14.0, "usage_202": 1.0, "usage_shop": 14.0, "adjustment_target": "201호", "added_amount": 1000, "final_amt_sum": 77500}, {"ym": "2021-06", "bill_amount": 71000, "bill_usage": null, "usage_total": 51.0, "usage_201": 16.0, "usage_202": 1.0, "usage_shop": 34.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 71500}, {"ym": "2021-07", "bill_amount": 84000, "bill_usage": null, "usage_total": 32.0, "usage_201": 13.0, "usage_202": 2.0, "usage_shop": 17.0, "adjustment_target": "상가", "added_amount": 500, "final_amt_sum": 84000}, {"ym": "2021-08", "bill_amount": 96000, "bill_usage": 33.0, "usage_total": 34.0, "usage_201": 17.0, "usage_202": 1.0, "usage_shop": 16.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 99000}, {"ym": "2021-09", "bill_amount": 105000, "bill_usage": null, "usage_total": 37.0, "usage_201": 14.0, "usage_202": 7.0, "usage_shop": 16.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 105000}, {"ym": "2021-10", "bill_amount": 114000, "bill_usage": 45.0, "usage_total": 43.0, "usage_201": 15.0, "usage_202": 13.0, "usage_shop": 15.0, "adjustment_target": "상가", "added_amount": 5000, "final_amt_sum": 114000}, {"ym": "2021-11", "bill_amount": null, "bill_usage": 22.0, "usage_total": 19.0, "usage_201": 4.0, "usage_202": 5.0, "usage_shop": 10.0, "adjustment_target": null, "added_amount": null, "final_amt_sum": null}, {"ym": "2021-12", "bill_amount": 37290, "bill_usage": 15.0, "usage_total": 15.0, "usage_201": 4.0, "usage_202": 5.0, "usage_shop": 6.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 37500}, {"ym": "2022-01", "bill_amount": 29580, "bill_usage": 12.0, "usage_total": 12.0, "usage_201": 4.0, "usage_202": 1.0, "usage_shop": 7.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 30000}, {"ym": "2022-02", "bill_amount": 39899, "bill_usage": 17.0, "usage_total": 21.0, "usage_201": 2.0, "usage_202": 12.0, "usage_shop": 7.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 49000}, {"ym": "2022-03", "bill_amount": 56425, "bill_usage": 25.0, "usage_total": 23.0, "usage_201": 2.0, "usage_202": 13.0, "usage_shop": 8.0, "adjustment_target": "상가", "added_amount": 4500, "final_amt_sum": 56500}, {"ym": "2022-04", "bill_amount": 52279, "bill_usage": 23.0, "usage_total": 24.0, "usage_201": 4.0, "usage_202": 9.0, "usage_shop": 11.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 54500}, {"ym": "2022-05", "bill_amount": 39899, "bill_usage": 17.0, "usage_total": 17.0, "usage_201": 3.0, "usage_202": 7.0, "usage_shop": 7.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 40000}, {"ym": "2022-06", "bill_amount": 62620, "bill_usage": 28.0, "usage_total": 29.0, "usage_201": 2.0, "usage_202": 14.0, "usage_shop": 13.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 65000}, {"ym": "2022-07", "bill_amount": 71780, "bill_usage": 35.0, "usage_total": 34.0, "usage_201": 3.0, "usage_202": 21.0, "usage_shop": 10.0, "adjustment_target": "상가", "added_amount": 2500, "final_amt_sum": 72000}, {"ym": "2022-08", "bill_amount": 60290, "bill_usage": 29.0, "usage_total": 29.0, "usage_201": 3.0, "usage_202": 16.0, "usage_shop": 10.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 60500}, {"ym": "2022-09", "bill_amount": 58390, "bill_usage": 28.0, "usage_total": 29.0, "usage_201": 3.0, "usage_202": 15.0, "usage_shop": 11.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 61000}, {"ym": "2022-10", "bill_amount": 56470, "bill_usage": 27.0, "usage_total": 26.0, "usage_201": 3.0, "usage_202": 10.0, "usage_shop": 13.0, "adjustment_target": "상가", "added_amount": 2000, "final_amt_sum": 56500}, {"ym": "2022-11", "bill_amount": 62620, "bill_usage": 28.0, "usage_total": 25.0, "usage_201": 4.0, "usage_202": 10.0, "usage_shop": 11.0, "adjustment_target": "상가", "added_amount": 7000, "final_amt_sum": 63000}, {"ym": "2022-12", "bill_amount": 79140, "bill_usage": 36.0, "usage_total": 39.0, "usage_201": 4.0, "usage_202": 18.0, "usage_shop": 17.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 86000}, {"ym": "2023-01", "bill_amount": 70880, "bill_usage": 32.0, "usage_total": 33.0, "usage_201": 3.0, "usage_202": 18.0, "usage_shop": 12.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 73000}, {"ym": "2023-02", "bill_amount": 60550, "bill_usage": 27.0, "usage_total": 26.0, "usage_201": 1.0, "usage_202": 17.0, "usage_shop": 8.0, "adjustment_target": "202호", "added_amount": 3000, "final_amt_sum": 61000}, {"ym": "2023-03", "bill_amount": 62620, "bill_usage": 28.0, "usage_total": 29.0, "usage_201": 3.0, "usage_202": 18.0, "usage_shop": 8.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 65000}, {"ym": "2023-04", "bill_amount": 75010, "bill_usage": 34.0, "usage_total": 37.0, "usage_201": 10.0, "usage_202": 17.0, "usage_shop": 10.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 81500}, {"ym": "2023-05", "bill_amount": 83720, "bill_usage": 38.0, "usage_total": 35.0, "usage_201": 10.0, "usage_202": 16.0, "usage_shop": 9.0, "adjustment_target": "202호", "added_amount": 6500, "final_amt_sum": 84000}, {"ym": "2023-06", "bill_amount": 89460, "bill_usage": 41.0, "usage_total": 44.0, "usage_201": 4.0, "usage_202": 18.0, "usage_shop": 22.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 96000}, {"ym": "2023-07", "bill_amount": 97720, "bill_usage": 45.0, "usage_total": 43.0, "usage_201": 6.0, "usage_202": 17.0, "usage_shop": 20.0, "adjustment_target": "202호", "added_amount": 4500, "final_amt_sum": 98000}, {"ym": "2023-08", "bill_amount": 101850, "bill_usage": 47.0, "usage_total": 44.0, "usage_201": 7.0, "usage_202": 18.0, "usage_shop": 19.0, "adjustment_target": "202호", "added_amount": 7000, "final_amt_sum": 102000}, {"ym": "2023-09", "bill_amount": 83770, "bill_usage": 40.0, "usage_total": 42.0, "usage_201": 8.0, "usage_202": 20.0, "usage_shop": 14.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 88500}, {"ym": "2023-10", "bill_amount": 91530, "bill_usage": 42.0, "usage_total": 43.0, "usage_201": 12.0, "usage_202": 18.0, "usage_shop": 13.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 93500}, {"ym": "2023-11", "bill_amount": 95660, "bill_usage": 44.0, "usage_total": 39.0, "usage_201": 12.0, "usage_202": 14.0, "usage_shop": 13.0, "adjustment_target": "202호", "added_amount": 11000, "final_amt_sum": 96000}, {"ym": "2023-12", "bill_amount": 68810, "bill_usage": 31.0, "usage_total": 31.0, "usage_201": 13.0, "usage_202": 9.0, "usage_shop": 9.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 69000}, {"ym": "2024-01", "bill_amount": 93590, "bill_usage": 43.0, "usage_total": 45.0, "usage_201": 16.0, "usage_202": 14.0, "usage_shop": 15.0, "adjustment_target": "202호", "added_amount": 0, "final_amt_sum": 98000}, {"ym": "2024-02", "bill_amount": 108050, "bill_usage": 50.0, "usage_total": 50.0, "usage_201": 4.0, "usage_202": 14.0, "usage_shop": 32.0, "adjustment_target": "상가", "added_amount": 500, "final_amt_sum": 108500}, {"ym": "2024-03", "bill_amount": 89460, "bill_usage": 41.0, "usage_total": 43.0, "usage_201": 3.0, "usage_202": 17.0, "usage_shop": 23.0, "adjustment_target": "상가", "added_amount": 0, "final_amt_sum": 93500}, {"ym": "2024-04", "bill_amount": 70880, "bill_usage": 32.0, "usage_total": 32.0, "usage_201": 8.0, "usage_202": 16.0, "usage_shop": 8.0, "adjustment_target": "상가", "added_amount": 500, "final_amt_sum": 71000}];
+    const STORAGE_KEY = "water_billing_records_v2";
+
+    function loadRecords() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+      return [...BASE_RECORDS];
+    }
+
+    let ALL_RECORDS = loadRecords();
+
+    function mround500(val) { return Math.round(val / 500) * 500; }
+    function ceil500(val) { return Math.ceil(val / 500) * 500; }
+
+    function clearAutoStyle(el) {
+      el.classList.remove("auto-filled");
+    }
+
+    function setAutoValue(id, val) {
+      const el = document.getElementById(id);
+      if (el && val !== null && val !== undefined && !Number.isNaN(val)) {
+        el.value = val;
+        el.classList.add("auto-filled");
+      }
+    }
+
+    function computeStats() {
+      const pools = { "201호": [], "202호": [], "상가": [] };
+      for (const r of ALL_RECORDS) {
+        if (r.usage_201 != null && r.usage_202 != null && r.usage_shop != null && r.usage_total > 0) {
+          pools["201호"].push(Number(r.usage_201));
+          pools["202호"].push(Number(r.usage_202));
+          pools["상가"].push(Number(r.usage_shop));
+        }
+      }
+      const stats = {};
+      for (const [k, arr] of Object.entries(pools)) {
+        const n = arr.length;
+        const mean = n ? arr.reduce((a, b) => a + b, 0) / n : 0;
+        const variance = n > 1 ? arr.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / (n - 1) : 0;
+        stats[k] = { n, mean, std: Math.sqrt(variance) };
+      }
+      let widest = "상가";
+      let maxStd = -1;
+      for (const [k, s] of Object.entries(stats)) {
+        if (s.std > maxStd) { maxStd = s.std; widest = k; }
+      }
+      return { stats, widest };
+    }
+
+    // Preprocess image (grayscale + contrast boost) for better digit OCR
+    function preprocessImage(file) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1400;
+          let w = img.width, h = img.height;
+          if (Math.max(w, h) > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          const imgData = ctx.getImageData(0, 0, w, h);
+          const d = imgData.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+            const contrasted = Math.min(255, Math.max(0, (gray - 128) * 1.35 + 128));
+            d[i] = d[i+1] = d[i+2] = contrasted;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          resolve(canvas.toDataURL("image/png"));
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function parseBillText(text) {
+      const clean = text.replace(/,/g, "");
+      let amount = null;
+      let usage = null;
+
+      // Look for amount near 납기내금액 / 납부하실 금액 / 합계 / 원
+      const amtPatterns = [
+        /(?:납기내금액|납부하실\s*금액|합\s*계|당월요금)[^\d](0, 12)(\d(4, 7))/g,
+        /(\d(4, 7))\s*원/g
+      ];
+      for (const pat of amtPatterns) {
+        const matches = [...clean.matchAll(pat)];
+        if (matches.length > 0) {
+          const nums = matches.map(m => Number(m[1])).filter(n => n >= 5000 && n <= 1000000);
+          if (nums.length > 0) { amount = nums[0]; break; }
+        }
+      }
+
+      // Look for usage near 사용량
+      const usageMatch = clean.match(/사용량[^\d](0, 10)(\d(1, 3))/);
+      if (usageMatch) {
+        usage = Number(usageMatch[1]);
+      }
+
+      return { amount, usage };
+    }
+
+    function parseMeterText(text, prevRef) {
+      const digits = text.match(/\d(3, 5)/g) || [];
+      const candidates = digits.map(d => Number(d)).filter(n => n > 0 && n < 100000);
+      if (candidates.length === 0) return null;
+      if (prevRef && prevRef > 0) {
+        // Prefer candidate slightly above prevRef (within +200 m3)
+        const plausible = candidates.filter(n => n >= prevRef && n <= prevRef + 250);
+        if (plausible.length > 0) {
+          plausible.sort((a, b) => (a - prevRef) - (b - prevRef));
+          return plausible[0];
+        }
+      }
+      // Prefer 4-digit numbers
+      const fourDigit = candidates.filter(n => n >= 100 && n <= 9999);
+      return fourDigit.length > 0 ? fourDigit[0] : candidates[0];
+    }
+
+    async function handleImageUpload(input, imgId, statusId, kind) {
+      const file = input.files && input.files[0];
+      if (!file) return;
+
+      const img = document.getElementById(imgId);
+      img.src = URL.createObjectURL(file);
+      img.style.display = "block";
+
+      const statusEl = document.getElementById(statusId);
+      statusEl.textContent = "숫자 읽는 중...";
+
+      try {
+        if (typeof Tesseract === "undefined") {
+          statusEl.textContent = "오프라인 상태입니다. 아래 칸에 직접 입력해 주세요.";
+          return;
+        }
+        const dataUrl = await preprocessImage(file);
+        const lang = kind === "bill" ? "kor+eng" : "eng";
+        const res = await Tesseract.recognize(dataUrl, lang);
+        const text = res.data.text || "";
+
+        if (kind === "bill") {
+          const parsed = parseBillText(text);
+          const foundParts = [];
+          if (parsed.amount) {
+            setAutoValue("billAmount", parsed.amount);
+            foundParts.push("금액 " + parsed.amount.toLocaleString() + "원");
+          }
+          if (parsed.usage) {
+            setAutoValue("billUsage", parsed.usage);
+            foundParts.push("사용량 " + parsed.usage + "㎥");
+          }
+          statusEl.textContent = foundParts.length > 0
+            ? "인식 완료: " + foundParts.join(", ") + " (아래 칸에서 확인하세요)"
+            : "자동 인식 실패 — 아래 칸에 직접 입력해 주세요.";
+        } else {
+          const map = {
+            meter201: { target: "curr201", prev: Number(document.getElementById("prev201").value) },
+            meter202: { target: "curr202", prev: Number(document.getElementById("prev202").value) },
+            meterTot: { target: "currTotal", prev: Number(document.getElementById("prevTotal").value) },
+          };
+          const cfg = map[kind];
+          const val = parseMeterText(text, cfg.prev);
+          if (val !== null) {
+            setAutoValue(cfg.target, val);
+            statusEl.textContent = "인식 숫자: " + val + " (맞는지 꼭 확인하세요)";
+          } else {
+            statusEl.textContent = "숫자 인식 어려움 — 아래 칸에 직접 입력해 주세요.";
+          }
+        }
+        calculateNow();
+      } catch (err) {
+        statusEl.textContent = "인식 오류 — 아래 칸에 직접 입력해 주세요.";
+      }
+    }
+
+    function calculateNow() {
+      const monthLabel = document.getElementById("monthLabel").value.trim() || "이번 달";
+      const billAmt = Number(document.getElementById("billAmount").value);
+      const billVol = Number(document.getElementById("billUsage").value);
+      const prevTot = Number(document.getElementById("prevTotal").value);
+      const currTot = Number(document.getElementById("currTotal").value);
+      const prev201 = Number(document.getElementById("prev201").value);
+      const curr201 = Number(document.getElementById("curr201").value);
+      const prev202 = Number(document.getElementById("prev202").value);
+      const curr202 = Number(document.getElementById("curr202").value);
+      const account = document.getElementById("accountInfo").value.trim();
+
+      const warnBox = document.getElementById("warnBox");
+      warnBox.classList.add("hidden");
+
+      const uTot = currTot - prevTot;
+      const u201 = curr201 - prev201;
+      const u202 = curr202 - prev202;
+      const uShop = uTot - (u201 + u202);
+
+      document.getElementById("u201Label").textContent = isFinite(u201) ? u201 : 0;
+      document.getElementById("u202Label").textContent = isFinite(u202) ? u202 : 0;
+      document.getElementById("uShopLabel").textContent = isFinite(uShop) ? uShop : 0;
+
+      const baseVol = billVol > 0 ? billVol : uTot;
+      if (!billAmt || billAmt <= 0 || !baseVol || baseVol <= 0 || !isFinite(u201) || !isFinite(u202) || !isFinite(uShop)) {
+        return null;
+      }
+
+      const warnings = [];
+      if (currTot < prevTot || curr201 < prev201 || curr202 < prev202) {
+        warnings.push("당월 계량기가 전월보다 작습니다. 숫자를 다시 확인해 주세요.");
+      }
+      if (uShop < 0) {
+        warnings.push("상가 사용량이 음수(" + uShop + "㎥)로 계산되었습니다. 계량기 숫자를 확인해 주세요.");
+      }
+      if (warnings.length > 0) {
+        warnBox.textContent = warnings.join(" / ");
+        warnBox.classList.remove("hidden");
+      }
+
+      const unitPrice = billAmt / baseVol;
+      let a201 = mround500(unitPrice * u201);
+      let a202 = mround500(unitPrice * u202);
+      let aShop = mround500(unitPrice * uShop);
+
+      const baseSum = a201 + a202 + aShop;
+      const shortfall = billAmt - baseSum;
+      const { widest } = computeStats();
+      let added = 0;
+
+      if (shortfall > 0) {
+        added = ceil500(shortfall);
+        if (widest === "201호") a201 += added;
+        else if (widest === "202호") a202 += added;
+        else aShop += added;
+      }
+
+      const finalSum = a201 + a202 + aShop;
+      document.getElementById("a201Label").textContent = a201.toLocaleString() + "원";
+      document.getElementById("a202Label").textContent = a202.toLocaleString() + "원";
+      document.getElementById("aShopLabel").textContent = aShop.toLocaleString() + "원";
+
+      document.getElementById("summaryBox").innerHTML =
+        `고지서 <b>${billAmt.toLocaleString()}원</b> · 기본합계 ${baseSum.toLocaleString()}원 · ` +
+        `보정대상 <b>${widest}</b> (+${added.toLocaleString()}원) · 최종합계 <b>${finalSum.toLocaleString()}원</b>`;
+
+      const acctLine = account ? `
+입금 계좌: ${account}` : "";
+      document.getElementById("msg201").value =
+        `[${monthLabel} 수도세 안내]
+201호 사용량: ${u201}㎥ / 청구금액: ${a201.toLocaleString()}원${acctLine}`;
+      document.getElementById("msg202").value =
+        `[${monthLabel} 수도세 안내]
+202호 사용량: ${u202}㎥ / 청구금액: ${a202.toLocaleString()}원${acctLine}`;
+      document.getElementById("msgShop").value =
+        `[${monthLabel} 상가 수도세 정산]
+상가 사용량: ${uShop}㎥ / 정산금액: ${aShop.toLocaleString()}원${acctLine}`;
+
+      return {
+        ym: new Date().toISOString().slice(0, 7),
+        bill_amount: billAmt,
+        bill_usage: billVol || uTot,
+        usage_total: uTot,
+        usage_201: u201,
+        usage_202: u202,
+        usage_shop: uShop,
+        adjustment_target: widest,
+        added_amount: added,
+        final_amt_sum: finalSum,
+        currTot, curr201, curr202
+      };
+    }
+
+    function saveCurrentToDB() {
+      const res = calculateNow();
+      if (!res) {
+        alert("먼저 고지서 금액과 계량기 숫자를 입력해 주세요.");
+        return;
+      }
+      ALL_RECORDS.push(res);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(ALL_RECORDS));
+      document.getElementById("prevTotal").value = res.currTot;
+      document.getElementById("prev201").value = res.curr201;
+      document.getElementById("prev202").value = res.curr202;
+      renderVerify();
+      alert("누적 DB에 저장되었고, 다음 달 전월 계량기 기준값도 자동 갱신되었습니다.");
+    }
+
+    function copyText(textareaId, btn) {
+      const el = document.getElementById(textareaId);
+      el.select();
+      navigator.clipboard?.writeText(el.value).catch(() => document.execCommand("copy"));
+      const orig = btn.textContent;
+      btn.textContent = "복사 완료!";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 1400);
+    }
+
+    function switchTab(tab) {
+      document.getElementById("simpleTab").classList.toggle("hidden", tab !== "simple");
+      document.getElementById("verifyTab").classList.toggle("hidden", tab !== "verify");
+      document.getElementById("tabSimpleBtn").classList.toggle("active", tab === "simple");
+      document.getElementById("tabVerifyBtn").classList.toggle("active", tab === "verify");
+    }
+
+    function renderVerify() {
+      const { stats, widest } = computeStats();
+      document.getElementById("stdSummary").innerHTML =
+        `누적 표준편차 기준 보정 대상: <b>${widest}</b> ` +
+        `(201호 ${stats["201호"].std.toFixed(2)}㎥ · 202호 ${stats["202호"].std.toFixed(2)}㎥ · 상가 ${stats["상가"].std.toFixed(2)}㎥)`;
+
+      const tbody = document.getElementById("historyBody");
+      tbody.innerHTML = "";
+      for (const r of ALL_RECORDS) {
+        if (r.final_amt_sum == null) continue;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${r.ym}</td>
+          <td>${Number(r.bill_amount).toLocaleString()}</td>
+          <td>${r.usage_201}/${r.usage_202}/${r.usage_shop}</td>
+          <td>${r.adjustment_target || "-"}</td>
+          <td>${Number(r.added_amount || 0).toLocaleString()}</td>
+          <td><b>${Number(r.final_amt_sum).toLocaleString()}</b></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function downloadJson() {
+      const blob = new Blob([JSON.stringify(ALL_RECORDS, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "water_billing_audit_records.json";
+      a.click();
+    }
+
+    function resetLocalDB() {
+      if (confirm("추가 저장한 내역을 지우고 초기 장부(2021~2024) 상태로 되돌릴까요?")) {
+        localStorage.removeItem(STORAGE_KEY);
+        ALL_RECORDS = [...BASE_RECORDS];
+        renderVerify();
+      }
+    }
+
+    renderVerify();
+  </script>
+</body>
+</html>

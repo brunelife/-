@@ -1,0 +1,6 @@
+{
+  "name": "매월 5일 수도세 간편 정산",
+  "description": "계량기 및 고지서 사진 자동 인식(OCR), 누적 표준편차 기반 500원 단위 보정 정산, 입주별 개별 문자 복사 및 누적 장부 DB 관리를 지원하는 수도세 정산 웹 앱",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

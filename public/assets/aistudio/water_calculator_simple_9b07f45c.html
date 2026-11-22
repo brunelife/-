@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>수도세 간편 정산 (매월 5일)</title>
+  <style>
+    :root {
+      --bg: #f6f8fa;
+      --card: #ffffff;
+      --text: #1b2430;
+      --muted: #5c6b7c;
+      --primary: #155eef;
+      --primary-dark: #1048b8;
+      --accent-bg: #eef4ff;
+      --border: #d7e0ea;
+      --success: #067647;
+      --success-bg: #ecfdf3;
+      --warn-bg: #fffaeb;
+      --warn-text: #93370d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 680px;
+      margin: 0 auto;
+    }
+    header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 24px;
+      font-weight: 800;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 15px;
+      margin: 0;
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 14px 12px;
+      font-size: 17px;
+      font-weight: 700;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      color: #ffffff;
+      border-color: var(--primary);
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+    }
+    .section-title {
+      font-size: 20px;
+      font-weight: 800;
+      margin: 0 0 12px 0;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 540px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+    .field {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    input[type="number"], input[type="text"] {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 20px;
+      font-weight: 700;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: #fcfdff;
+      color: var(--text);
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: #ffffff;
+    }
+    .photo-box {
+      border: 1.5px dashed var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      background: #fafbfd;
+    }
+    .photo-box input[type="file"] {
+      font-size: 15px;
+      width: 100%;
+    }
+    .photo-preview {
+      margin-top: 8px;
+      max-height: 140px;
+      border-radius: 8px;
+      display: none;
+      object-fit: cover;
+      width: 100%;
+    }
+    .btn-primary {
+      width: 100%;
+      padding: 16px;
+      font-size: 20px;
+      font-weight: 800;
+      background: var(--primary);
+      color: #ffffff;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+    }
+    .btn-primary:hover {
+      background: var(--primary-dark);
+    }
+    .unit-card {
+      border: 1.5px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: #ffffff;
+    }
+    .unit-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+    .unit-name {
+      font-size: 21px;
+      font-weight: 800;
+    }
+    .unit-amount {
+      font-size: 24px;
+      font-weight: 900;
+      color: var(--primary);
+    }
+    .msg-box {
+      width: 100%;
+      min-height: 92px;
+      font-size: 16px;
+      line-height: 1.45;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--accent-bg);
+      color: var(--text);
+      margin-bottom: 8px;
+      resize: vertical;
+    }
+    .btn-copy {
+      width: 100%;
+      padding: 12px;
+      font-size: 17px;
+      font-weight: 800;
+      background: #1d2939;
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .btn-copy.copied {
+      background: var(--success);
+    }
+    .info-banner {
+      background: var(--warn-bg);
+      color: var(--warn-text);
+      border: 1px solid #fedf89;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 15px;
+      margin-bottom: 12px;
+    }
+    .summary-bar {
+      background: var(--success-bg);
+      border: 1px solid #a6f4c5;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 8px 6px;
+      text-align: right;
+    }
+    th:first-child, td:first-child {
+      text-align: left;
+    }
+    th {
+      background: #f2f5f9;
+      font-weight: 800;
+    }
+    .table-scroll {
+      overflow-x: auto;
+      max-height: 360px;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>매월 5일 수도세 간편 정산</h1>
+      <p class="sub">500원 단위 반올림 · 고지서 미달 시 누적 표준편차 최대 호실 상향 보정 · 입주별 개별 안내</p>
+    </header>
+
+    <div class="tabs">
+      <button id="tabSimpleBtn" class="tab-btn active" onclick="switchTab('simple')">정산 및 문자 복사</button>
+      <button id="tabVerifyBtn" class="tab-btn" onclick="switchTab('verify')">검증 및 과거 기록</button>
+    </div>
+
+    <!-- 단순 유지 정산 탭 -->
+    <div id="simpleTab">
+      <div class="card">
+        <div class="section-title">1. 사진 올리기 (선택)</div>
+        <div class="grid-2">
+          <div class="photo-box">
+            <label>201호 계량기 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="previewImg(this, 'prev201')" />
+            <img id="prev201" class="photo-preview" alt="201호 미리보기" />
+          </div>
+          <div class="photo-box">
+            <label>202호 계량기 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="previewImg(this, 'prev202')" />
+            <img id="prev202" class="photo-preview" alt="202호 미리보기" />
+          </div>
+          <div class="photo-box">
+            <label>건물 전체 계량기 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="previewImg(this, 'prevTot')" />
+            <img id="prevTot" class="photo-preview" alt="건물 전체 미리보기" />
+          </div>
+          <div class="photo-box">
+            <label>수도세 고지서 사진</label>
+            <input type="file" accept="image/*" capture="environment" onchange="previewImg(this, 'prevBill')" />
+            <img id="prevBill" class="photo-preview" alt="고지서 미리보기" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">2. 숫자 입력 (전월 5일 → 당월 5일)</div>
+        <div class="field">
+          <label for="monthLabel">청구 월 표시</label>
+          <input type="text" id="monthLabel" value="이번 달" />
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="billAmount">고지서 금액 (원)</label>
+            <input type="number" id="billAmount" placeholder="예: 70880" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="billUsage">고지서 사용량 (㎥)</label>
+            <input type="number" step="0.1" id="billUsage" placeholder="예: 32" oninput="calculateNow()" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label for="prevTotal">전월 건물 전체 계량기</label>
+            <input type="number" step="0.1" id="prevTotal" value="2244" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="currTotal">당월 건물 전체 계량기</label>
+            <input type="number" step="0.1" id="currTotal" placeholder="숫자 입력" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="prev201">전월 201호 계량기</label>
+            <input type="number" step="0.1" id="prev201" value="692" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="curr201">당월 201호 계량기</label>
+            <input type="number" step="0.1" id="curr201" placeholder="숫자 입력" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="prev202">전월 202호 계량기</label>
+            <input type="number" step="0.1" id="prev202" value="992" oninput="calculateNow()" />
+          </div>
+          <div class="field">
+            <label for="curr202">당월 202호 계량기</label>
+            <input type="number" step="0.1" id="curr202" placeholder="숫자 입력" oninput="calculateNow()" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="accountInfo">입금 계좌 안내</label>
+          <input type="text" id="accountInfo" value="538401-04-084962 국민 김영근" oninput="calculateNow()" />
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">3. 입주별 정산 및 개별 문자 복사</div>
+        <div id="warnBox" class="info-banner hidden"></div>
+        <div id="summaryBox" class="summary-bar">당월 계량기와 고지서 금액을 입력하면 자동으로 계산됩니다.</div>
+
+        <div class="unit-card">
+          <div class="unit-header">
+            <span class="unit-name">201호 (<span id="u201Label">0</span>㎥)</span>
+            <span class="unit-amount" id="a201Label">0원</span>
+          </div>
+          <textarea id="msg201" class="msg-box"></textarea>
+          <button class="btn-copy" onclick="copyText('msg201', this)">201호 안내 문구 복사</button>
+        </div>
+
+        <div class="unit-card">
+          <div class="unit-header">
+            <span class="unit-name">202호 (<span id="u202Label">0</span>㎥)</span>
+            <span class="unit-amount" id="a202Label">0원</span>
+          </div>
+          <textarea id="msg202" class="msg-box"></textarea>
+          <button class="btn-copy" onclick="copyText('msg202', this)">202호 안내 문구 복사</button>
+        </div>
+
+        <div class="unit-card">
+          <div class="unit-header">
+            <span class="unit-name">상가 (<span id="uShopLabel">0</span>㎥)</span>
+            <span class="unit-amount" id="aShopLabel">0원</span>
+          </div>
+          <textarea id="msgShop" class="msg-box"></textarea>
+          <button class="btn-copy" onclick="copyText('msgShop', this)">상가 정산 문구 복사</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 검증 및 과거 기록 탭 -->
+    <div id="verifyTab" class="hidden">
+      <div class="card">
+        <div class="section-title">누적 표준편차 보정 대상 검증</div>
+        <div id="stdSummary" class="summary-bar"></div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>연월</th>
+                <th>고지서</th>
+                <th>201/202/상가(㎥)</th>
+                <th>보정대상</th>
+                <th>가산액</th>
+                <th>최종합계</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const HISTORICAL_RECORDS = [];
+
+    function mround500(val) {
+      return Math.round(val / 500) * 500;
+    }
+
+    function ceil500(val) {
+      return Math.ceil(val / 500) * 500;
+    }
+
+    function computeStats(extraUsages = null) {
+      const pools = { "201호": [], "202호": [], "상가": [] };
+      for (const r of HISTORICAL_RECORDS) {
+        if (r.usage_201 != null && r.usage_202 != null && r.usage_shop != null && r.usage_total > 0) {
+          pools["201호"].push(Number(r.usage_201));
+          pools["202호"].push(Number(r.usage_202));
+          pools["상가"].push(Number(r.usage_shop));
+        }
+      }
+      if (extraUsages) {
+        pools["201호"].push(extraUsages["201호"]);
+        pools["202호"].push(extraUsages["202호"]);
+        pools["상가"].push(extraUsages["상가"]);
+      }
+
+      const stats = {};
+      for (const [k, arr] of Object.entries(pools)) {
+        const n = arr.length;
+        const mean = n ? arr.reduce((a, b) => a + b, 0) / n : 0;
+        const variance = n > 1 ? arr.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / (n - 1) : 0;
+        stats[k] = { n, mean, std: Math.sqrt(variance) };
+      }
+      let widest = "상가";
+      let maxStd = -1;
+      for (const [k, s] of Object.entries(stats)) {
+        if (s.std > maxStd) {
+          maxStd = s.std;
+          widest = k;
+        }
+      }
+      return { stats, widest };
+    }
+
+    function previewImg(input, imgId) {
+      const img = document.getElementById(imgId);
+      if (input.files && input.files[0]) {
+        img.src = URL.createObjectURL(input.files[0]);
+        img.style.display = "block";
+      }
+    }
+
+    function calculateNow() {
+      const monthLabel = document.getElementById("monthLabel").value.trim() || "이번 달";
+      const billAmt = Number(document.getElementById("billAmount").value);
+      const billVol = Number(document.getElementById("billUsage").value);
+      const prevTot = Number(document.getElementById("prevTotal").value);
+      const currTot = Number(document.getElementById("currTotal").value);
+      const prev201 = Number(document.getElementById("prev201").value);
+      const curr201 = Number(document.getElementById("curr201").value);
+      const prev202 = Number(document.getElementById("prev202").value);
+      const curr202 = Number(document.getElementById("curr202").value);
+      const account = document.getElementById("accountInfo").value.trim();
+
+      const warnBox = document.getElementById("warnBox");
+      warnBox.classList.add("hidden");
+
+      const uTot = currTot - prevTot;
+      const u201 = curr201 - prev201;
+      const u202 = curr202 - prev202;
+      const uShop = uTot - (u201 + u202);
+
+      document.getElementById("u201Label").textContent = isFinite(u201) ? u201 : 0;
+      document.getElementById("u202Label").textContent = isFinite(u202) ? u202 : 0;
+      document.getElementById("uShopLabel").textContent = isFinite(uShop) ? uShop : 0;
+
+      const baseVol = billVol > 0 ? billVol : uTot;
+      if (!billAmt || billAmt <= 0 || !baseVol || baseVol <= 0 || !isFinite(u201) || !isFinite(u202) || !isFinite(uShop)) {
+        return;
+      }
+
+      const warnings = [];
+      if (currTot < prevTot || curr201 < prev201 || curr202 < prev202) {
+        warnings.push("당월 계량기가 전월보다 작습니다. 숫자를 다시 확인해 주세요.");
+      }
+      if (uShop < 0) {
+        warnings.push("상가 사용량이 음수(" + uShop + "㎥)로 계산되었습니다. 계량기 숫자를 확인해 주세요.");
+      }
+      if (warnings.length > 0) {
+        warnBox.textContent = warnings.join(" / ");
+        warnBox.classList.remove("hidden");
+      }
+
+      const unitPrice = billAmt / baseVol;
+      let a201 = mround500(unitPrice * u201);
+      let a202 = mround500(unitPrice * u202);
+      let aShop = mround500(unitPrice * uShop);
+
+      const baseSum = a201 + a202 + aShop;
+      const shortfall = billAmt - baseSum;
+      const { stats, widest } = computeStats();
+      let added = 0;
+
+      if (shortfall > 0) {
+        added = ceil500(shortfall);
+        if (widest === "201호") a201 += added;
+        else if (widest === "202호") a202 += added;
+        else aShop += added;
+      }
+
+      const finalSum = a201 + a202 + aShop;
+      document.getElementById("a201Label").textContent = a201.toLocaleString() + "원";
+      document.getElementById("a202Label").textContent = a202.toLocaleString() + "원";
+      document.getElementById("aShopLabel").textContent = aShop.toLocaleString() + "원";
+
+      document.getElementById("summaryBox").innerHTML =
+        `고지서 <b>${billAmt.toLocaleString()}원</b> · 기본합계 ${baseSum.toLocaleString()}원 · ` +
+        `보정대상 <b>${widest}</b> (+${added.toLocaleString()}원) · 최종합계 <b>${finalSum.toLocaleString()}원</b>`;
+
+      const acctLine = account ? `
+입금 계좌: ${account}` : "";
+      document.getElementById("msg201").value =
+        `[${monthLabel} 수도세 안내]
+201호 사용량: ${u201}㎥ / 청구금액: ${a201.toLocaleString()}원${acctLine}`;
+      document.getElementById("msg202").value =
+        `[${monthLabel} 수도세 안내]
+202호 사용량: ${u202}㎥ / 청구금액: ${a202.toLocaleString()}원${acctLine}`;
+      document.getElementById("msgShop").value =
+        `[${monthLabel} 상가 수도세 정산]
+상가 사용량: ${uShop}㎥ / 정산금액: ${aShop.toLocaleString()}원${acctLine}`;
+    }
+
+    function copyText(textareaId, btn) {
+      const el = document.getElementById(textareaId);
+      el.select();
+      navigator.clipboard?.writeText(el.value).catch(() => document.execCommand("copy"));
+      const orig = btn.textContent;
+      btn.textContent = "복사 완료!";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove("copied");
+      }, 1400);
+    }
+
+    function switchTab(tab) {
+      document.getElementById("simpleTab").classList.toggle("hidden", tab !== "simple");
+      document.getElementById("verifyTab").classList.toggle("hidden", tab !== "verify");
+      document.getElementById("tabSimpleBtn").classList.toggle("active", tab === "simple");
+      document.getElementById("tabVerifyBtn").classList.toggle("active", tab === "verify");
+    }
+
+    function renderVerify() {
+      const { stats, widest } = computeStats();
+      document.getElementById("stdSummary").innerHTML =
+        `누적 표준편차 기준 보정 대상: <b>${widest}</b> ` +
+        `(201호 편차 ${stats["201호"].std.toFixed(2)}㎥, 202호 편차 ${stats["202호"].std.toFixed(2)}㎥, 상가 편차 ${stats["상가"].std.toFixed(2)}㎥)`;
+
+      const tbody = document.getElementById("historyBody");
+      tbody.innerHTML = "";
+      for (const r of HISTORICAL_RECORDS) {
+        if (r.final_amt_sum == null) continue;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${r.ym}</td>
+          <td>${Number(r.bill_amount).toLocaleString()}</td>
+          <td>${r.usage_201}/${r.usage_202}/${r.usage_shop}</td>
+          <td>${r.adjustment_target || "-"}</td>
+          <td>${Number(r.added_amount || 0).toLocaleString()}</td>
+          <td><b>${Number(r.final_amt_sum).toLocaleString()}</b></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    renderVerify();
+  </script>
+</body>
+</html>
