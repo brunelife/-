@@ -209,10 +209,11 @@ CRITICAL RULES FOR KOREAN WATER METERS:
    - Ignore printed technical specs on the white dial face: Q3: 1.6m³/h, Q2/Q1: 4-2/100, Q1: 0.016-5/100, 15mm, 20mm, 1.0MPa, MPI-1-07-46, serial numbers on the brass rim.
 
 4. ROLLING / TRANSITIONING RIGHTMOST DIGIT ("일" place):
-   - Many Korean meters have a slightly taller/notched window on the rightmost digit ("일" place) so you can partially see the next consecutive digit below or above the current digit (e.g., "8" with "9" peeking underneath, or "6" with "7" peeking, or "2" with "3" peeking).
-   - Read the digit that occupies the main horizontal alignment line with the other drums (usually the upper/centered digit when the next digit is only partially visible at the bottom).
-   - If the rightmost drum is noticeably mid-roll between N and N+1, set meterValue to the primary aligned integer and set alternateValue to the adjacent integer (N+1 or N-1), and mention it briefly in Korean in "note" (e.g., "끝자리 8→9 넘어가는 중").
-   - If clearly settled on a single digit, set alternateValue to null.
+   - Many Korean meters have a slightly taller/notched window on the rightmost digit ("일" place) where two consecutive digits can be seen as the wheel rolls (e.g., "8" with "9" peeking underneath, "6" with "7" peeking, or "2" with "3" peeking).
+   - IMPORTANT USER RULE: Whenever the rightmost drum is visibly rolling/transitioning between N and N+1 (i.e., the next digit N+1 is already visibly entering the window), ALWAYS pick the NEXT / HIGHER integer (N+1) as "meterValue"!
+   - Example: if "0778" shows "9" entering below "8", return meterValue: 779, alternateValue: 778, note: "끝자리 8→9 넘어가는 중 (779 자동 적용)".
+   - Example: if "1316" shows "7" entering below "6", return meterValue: 1317, alternateValue: 1316, note: "끝자리 6→7 넘어가는 중 (1317 자동 적용)".
+   - If the rightmost digit is cleanly settled with no next digit rolling in, return that exact integer as meterValue and set alternateValue to null.
 
 5. DO NOT HALLUCINATE FROM PREVIOUS READING:
    - A previous month reference number may be provided only as weak context.
@@ -491,7 +492,7 @@ export async function analyzeWaterPhoto(
       };
     }
 
-    const meterValue = toFiniteIntOrNull(parsed.meterValue, 0, 999999);
+    let meterValue = toFiniteIntOrNull(parsed.meterValue, 0, 999999);
     let alternateValue = toFiniteIntOrNull(parsed.alternateValue, 0, 999999);
     if (
       alternateValue !== null &&
@@ -500,6 +501,21 @@ export async function analyzeWaterPhoto(
     ) {
       alternateValue = null;
     }
+
+    let finalNote = note;
+    // Deterministically auto-promote to the higher integer when a rolling transition is detected
+    if (
+      meterValue !== null &&
+      alternateValue !== null &&
+      alternateValue === meterValue + 1
+    ) {
+      const prevDigit = meterValue % 10;
+      const nextDigit = alternateValue % 10;
+      meterValue = alternateValue;
+      finalNote = `끝자리 ${prevDigit}→${nextDigit} 넘어가는 중 (${meterValue} 자동 적용)`;
+    }
+    // Never show a separate alternate picker button once auto-applied
+    alternateValue = null;
 
     const rawDigits =
       typeof parsed.rawDigits === 'string' && parsed.rawDigits.trim().length > 0
@@ -514,7 +530,7 @@ export async function analyzeWaterPhoto(
       rawDigits,
       rotationDegrees,
       confidence,
-      note,
+      note: finalNote,
     };
   } catch (err) {
     throw classifyGeminiError(err);

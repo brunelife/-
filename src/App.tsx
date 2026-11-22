@@ -354,9 +354,9 @@ function WaterBillingApp() {
                 status: 'done',
                 progress: 100,
                 detectedSummary: String(res.meterValue),
-                alternateValue: res.alternateValue ?? null,
+                alternateValue: null,
                 note: res.note || null,
-                message: `읽은 숫자: ${res.meterValue}${res.rawDigits && res.rawDigits !== String(res.meterValue) ? ` (${res.rawDigits})` : ''}`,
+                message: `읽은 숫자: ${res.meterValue}`,
               },
             }));
           } else {
@@ -393,45 +393,6 @@ function WaterBillingApp() {
       }
     },
     [inputs.prev201, inputs.prev202, inputs.prevTotal]
-  );
-
-  const handlePickAlternate = useCallback(
-    (kind: Exclude<PhotoKind, 'bill'>, value: number) => {
-      const fieldMap: Record<Exclude<PhotoKind, 'bill'>, keyof SettlementInputs> =
-        {
-          meter201: 'curr201',
-          meter202: 'curr202',
-          meterTot: 'currTotal',
-        };
-      const labelMap: Record<Exclude<PhotoKind, 'bill'>, string> = {
-        meter201: '201호',
-        meter202: '202호',
-        meterTot: '건물 전체',
-      };
-      const targetField = fieldMap[kind];
-      const previousVal = Number(inputs[targetField]);
-
-      setJustSaved(false);
-      setInputs((prev) => ({
-        ...prev,
-        [targetField]: String(value),
-      }));
-      setAutoFilledFields((prev) => ({ ...prev, [targetField]: true }));
-      setPhotos((prev) => ({
-        ...prev,
-        [kind]: {
-          ...prev[kind],
-          detectedSummary: String(value),
-          alternateValue:
-            Number.isFinite(previousVal) && previousVal !== value
-              ? previousVal
-              : null,
-          message: `읽은 숫자: ${value} (선택 변경됨)`,
-        },
-      }));
-      showToast(`${labelMap[kind]} 숫자를 ${value}(으)로 바꿨어요.`);
-    },
-    [inputs, showToast]
   );
 
   const handleClearCurrentMonth = useCallback(() => {
@@ -698,7 +659,6 @@ function WaterBillingApp() {
             onPhotoSelect={handlePhotoSelect}
             onPhotoClear={handlePhotoClear}
             onPhotoZoom={(url, title) => setZoomPhoto({ url, title })}
-            onPickAlternate={handlePickAlternate}
             onClearCurrentMonth={handleClearCurrentMonth}
             onSaveToDb={handleSaveToDb}
             onResetSavedFlag={() => setJustSaved(false)}
