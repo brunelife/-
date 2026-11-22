@@ -3,6 +3,8 @@ import {
   Camera,
   CheckCircle2,
   AlertCircle,
+  Clock,
+  Image as ImageIcon,
   Loader2,
   Maximize2,
   RotateCcw,
@@ -28,7 +30,8 @@ export function PhotoUploadCard({
   onClear,
   onZoom,
 }: PhotoUploadCardProps) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -71,8 +74,9 @@ export function PhotoUploadCard({
         )}
       </div>
 
+      {/* Camera-direct input */}
       <input
-        ref={inputRef}
+        ref={cameraInputRef}
         type="file"
         accept="image/*"
         capture="environment"
@@ -80,45 +84,80 @@ export function PhotoUploadCard({
         className="sr-only"
       />
 
+      {/* Saved gallery / album photo input (no capture attribute) */}
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleChange}
+        className="sr-only"
+      />
+
       {state.previewUrl ? (
         <div className="space-y-3">
-          <div className="relative rounded-xl overflow-hidden border border-[#CBD5E1] bg-[#0F172A]/5">
+          <div className="relative rounded-xl overflow-hidden border border-[#CBD5E1] bg-[#0F172A]">
             <img
-              src={state.previewUrl}
+              src={state.focusedPreviewUrl || state.previewUrl}
               alt={`${label} 미리보기`}
               referrerPolicy="no-referrer"
               onClick={() => onZoom(state.previewUrl!, label)}
-              className="w-full h-40 sm:h-44 object-cover cursor-zoom-in"
+              className="w-full h-40 sm:h-44 object-contain cursor-zoom-in"
             />
+            {state.capturedAtKst && (
+              <div className="px-3 py-1.5 bg-[#0F172A]/90 border-t border-white/10 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 font-mono tabular-nums">
+                <Clock className="w-3.5 h-3.5 shrink-0" />
+                <span>촬영: {state.capturedAtKst} (한국시간)</span>
+              </div>
+            )}
           </div>
+
+          <button
+            type="button"
+            onClick={() => onZoom(state.previewUrl!, label)}
+            className="w-full min-h-[46px] px-3 py-2 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[15px] font-bold text-[#111827] inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
+          >
+            <Maximize2 className="w-4 h-4 shrink-0" />
+            <span>사진 크게 보기</span>
+          </button>
+
           <div className="grid grid-cols-2 gap-2.5">
             <button
               type="button"
-              onClick={() => onZoom(state.previewUrl!, label)}
-              className="min-h-[48px] px-3 py-2.5 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[15px] font-bold text-[#111827] inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
-            >
-              <Maximize2 className="w-4 h-4 shrink-0" />
-              <span>사진 크게 보기</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              className="min-h-[48px] px-3 py-2.5 rounded-xl border-2 border-[#155EEF] bg-[#EEF4FF] hover:bg-[#DCE8FF] text-[15px] font-bold text-[#1048B8] inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
+              onClick={() => cameraInputRef.current?.click()}
+              className="min-h-[48px] px-3 py-2.5 rounded-xl border-2 border-[#155EEF] bg-[#EEF4FF] hover:bg-[#DCE8FF] text-[15px] font-bold text-[#1048B8] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
               <Camera className="w-4 h-4 shrink-0" />
               <span>다시 찍기</span>
             </button>
+            <button
+              type="button"
+              onClick={() => galleryInputRef.current?.click()}
+              className="min-h-[48px] px-3 py-2.5 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[15px] font-bold text-[#334155] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              <ImageIcon className="w-4 h-4 shrink-0" />
+              <span>앨범에서 변경</span>
+            </button>
           </div>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          className="w-full min-h-[60px] rounded-xl bg-[#155EEF] hover:bg-[#1048B8] active:scale-[0.99] text-white text-lg font-extrabold inline-flex items-center justify-center gap-2.5 px-4 py-3.5 transition-all cursor-pointer"
-        >
-          <Camera className="w-6 h-6 shrink-0" />
-          <span>{label} 찍기</span>
-        </button>
+        <div className="space-y-2.5">
+          <button
+            type="button"
+            onClick={() => cameraInputRef.current?.click()}
+            className="w-full min-h-[58px] rounded-xl bg-[#155EEF] hover:bg-[#1048B8] active:scale-[0.99] text-white text-lg font-extrabold inline-flex items-center justify-center gap-2.5 px-4 py-3 transition-all cursor-pointer"
+          >
+            <Camera className="w-6 h-6 shrink-0" />
+            <span>카메라로 바로 찍기</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => galleryInputRef.current?.click()}
+            className="w-full min-h-[52px] rounded-xl border-2 border-[#155EEF] bg-[#EEF4FF] hover:bg-[#DCE8FF] active:scale-[0.99] text-[#1048B8] text-base font-extrabold inline-flex items-center justify-center gap-2 px-4 py-2.5 transition-all cursor-pointer"
+          >
+            <ImageIcon className="w-5 h-5 shrink-0" />
+            <span>저장된 사진 올리기 (앨범)</span>
+          </button>
+        </div>
       )}
 
       {state.status === 'processing' && (

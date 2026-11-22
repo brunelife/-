@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Calendar,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -14,6 +15,7 @@ import {
   Minus,
   Plus,
   RotateCcw,
+  RotateCw,
   Save,
 } from 'lucide-react';
 import {
@@ -40,12 +42,18 @@ interface SettlementTabProps {
   autoFilledFields: Record<string, boolean>;
   photos: Record<PhotoKind, PhotoUploadState>;
   calc: SettlementCalculation;
+  kstDateInfo: {
+    koreanDate: string;
+    compactDateTime: string;
+    fromPhoto: boolean;
+  };
   saving: boolean;
   justSaved: boolean;
   isCloudSynced: boolean;
   onInputChange: (field: keyof SettlementInputs, value: string) => void;
   onPhotoSelect: (kind: PhotoKind, file: File) => void;
   onPhotoClear: (kind: PhotoKind) => void;
+  onPhotoRotate: (kind: PhotoKind) => void;
   onPhotoZoom: (url: string, title: string) => void;
   onClearCurrentMonth: () => void;
   onSaveToDb: () => void;
@@ -90,12 +98,14 @@ export function SettlementTab({
   autoFilledFields,
   photos,
   calc,
+  kstDateInfo,
   saving,
   justSaved,
   isCloudSynced,
   onInputChange,
   onPhotoSelect,
   onPhotoClear,
+  onPhotoRotate,
   onPhotoZoom,
   onClearCurrentMonth,
   onSaveToDb,
@@ -214,28 +224,41 @@ export function SettlementTab({
   const renderInlinePhotoPreview = (kind: PhotoKind, label: string) => {
     const photo = photos[kind];
     if (!photo.previewUrl) return null;
+    const displaySrc = photo.focusedPreviewUrl || photo.previewUrl;
     return (
-      <div className="mb-3 rounded-xl overflow-hidden border border-[#CBD5E1] bg-[#F8FAFC]">
-        <div className="flex items-center justify-between gap-2 px-3 py-2 bg-[#F1F5F9] border-b border-[#DCE3EC]">
+      <div className="mb-3 rounded-xl overflow-hidden border border-[#CBD5E1] bg-[#0F172A]">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-[#F1F5F9] border-b border-[#DCE3EC]">
           <span className="text-xs sm:text-sm font-bold text-[#334155]">
-            방금 찍은 {label} (숫자 비교용)
+            {label} (숫자 비교용 · 자동 정렬)
           </span>
-          <button
-            type="button"
-            onClick={() => onPhotoZoom(photo.previewUrl!, label)}
-            className="min-h-[34px] px-2.5 rounded-lg bg-white border border-[#CBD5E1] text-xs font-bold text-[#155EEF] inline-flex items-center gap-1 cursor-pointer"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-            <span>크게 보기</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onPhotoRotate(kind)}
+              className="min-h-[34px] px-2.5 rounded-lg bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] text-xs font-bold text-[#334155] inline-flex items-center gap-1 cursor-pointer"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              <span>돌리기</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onPhotoZoom(photo.previewUrl!, label)}
+              className="min-h-[34px] px-2.5 rounded-lg bg-white border border-[#CBD5E1] hover:bg-[#EEF4FF] text-xs font-bold text-[#155EEF] inline-flex items-center gap-1 cursor-pointer"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span>크게 보기</span>
+            </button>
+          </div>
         </div>
-        <img
-          src={photo.previewUrl}
-          alt={`${label} 확인 사진`}
-          referrerPolicy="no-referrer"
-          onClick={() => onPhotoZoom(photo.previewUrl!, label)}
-          className="w-full h-28 sm:h-32 object-cover cursor-zoom-in"
-        />
+        <div className="w-full h-36 sm:h-44 flex items-center justify-center p-1.5 bg-[#0F172A]">
+          <img
+            src={displaySrc}
+            alt={`${label} 확인 사진`}
+            referrerPolicy="no-referrer"
+            onClick={() => onPhotoZoom(photo.previewUrl!, label)}
+            className="max-w-full max-h-full object-contain rounded cursor-zoom-in"
+          />
+        </div>
       </div>
     );
   };
@@ -303,15 +326,38 @@ export function SettlementTab({
       {/* STEP 1: Photo Capture */}
       {step === 1 && (
         <div className="space-y-4">
-          <div className="bg-white border border-[#DCE3EC] rounded-2xl p-5">
-            <h2 className="text-xl sm:text-2xl font-extrabold text-[#111827] leading-snug">
-              계량기와 고지서 사진을 찍어주세요
-            </h2>
-            <p className="text-base text-[#475569] mt-1.5 leading-relaxed">
-              파란 버튼을 눌러 사진을 찍으면 숫자가 자동으로 들어갑니다.
-              <br />
-              사진을 안 찍고 다음 단계에서 숫자를 직접 적어도 괜찮습니다.
-            </p>
+          <div className="bg-white border border-[#DCE3EC] rounded-2xl p-5 space-y-3">
+            <div>
+              <h2 className="text-xl sm:text-2xl font-extrabold text-[#111827] leading-snug">
+                계량기와 고지서 사진을 올려주세요
+              </h2>
+              <p className="text-base text-[#475569] mt-1.5 leading-relaxed">
+                바로 찍거나 앨범에서 사진을 고르면 숫자와 날짜가 자동으로
+                들어갑니다.
+                <br />
+                사진 없이 다음 단계에서 직접 적어도 괜찮습니다.
+              </p>
+            </div>
+            <div
+              className={`rounded-xl px-3.5 py-2.5 border flex flex-wrap items-center justify-between gap-2 text-sm sm:text-[15px] font-bold ${
+                kstDateInfo.fromPhoto
+                  ? 'bg-[#EEF4FF] border-[#BFDBFE] text-[#1048B8]'
+                  : 'bg-[#F8FAFC] border-[#DCE3EC] text-[#334155]'
+              }`}
+            >
+              <span className="inline-flex items-center gap-2">
+                <Calendar className="w-4 h-4 shrink-0" />
+                <span>
+                  한국시간 기준: {kstDateInfo.koreanDate} ({inputs.monthLabel}{' '}
+                  정산)
+                </span>
+              </span>
+              <span className="text-xs sm:text-sm font-mono tabular-nums opacity-90">
+                {kstDateInfo.fromPhoto
+                  ? `사진 촬영일시 자동 반영 (${kstDateInfo.compactDateTime})`
+                  : '사진을 올리면 촬영일시로 자동 맞춤'}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -352,6 +398,13 @@ export function SettlementTab({
               </h2>
               <p className="text-[15px] text-[#475569] mt-1">
                 파란 칸은 사진에서 읽어온 숫자입니다. 틀리면 칸을 눌러 고치세요.
+              </p>
+              <p className="text-sm font-bold text-[#155EEF] mt-1.5 inline-flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 shrink-0" />
+                <span>
+                  정산 기준일 (한국시간): {kstDateInfo.koreanDate} ·{' '}
+                  {inputs.monthLabel}
+                </span>
               </p>
             </div>
             <button

@@ -40,7 +40,15 @@ import {
   getCurrentYm,
   ymToKoreanLabel,
 } from './utils/billingMath';
-import { runPhotoOcr } from './utils/ocrEngine';
+import {
+  createAlignedPhotoPreviews,
+  rotatePhotoUrlCw90,
+  runPhotoOcr,
+} from './utils/ocrEngine';
+import {
+  extractPhotoTimestampKst,
+  getNowKstTimestamp,
+} from './utils/photoTimestamp';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { PhotoZoomModal } from './components/PhotoZoomModal';
@@ -51,12 +59,14 @@ type ActiveTab = 'simple' | 'verify';
 
 const INITIAL_PHOTO_STATE: PhotoUploadState = {
   previewUrl: null,
+  focusedPreviewUrl: null,
   status: 'idle',
   message: '',
   progress: 0,
   detectedSummary: null,
   alternateValue: null,
   note: null,
+  capturedAtKst: null,
 };
 
 function createInitialPhotos(): Record<PhotoKind, PhotoUploadState> {
@@ -110,6 +120,18 @@ function WaterBillingApp() {
   const [photos, setPhotos] = useState<Record<PhotoKind, PhotoUploadState>>(
     createInitialPhotos
   );
+  const [kstDateInfo, setKstDateInfo] = useState<{
+    koreanDate: string;
+    compactDateTime: string;
+    fromPhoto: boolean;
+  }>(() => {
+    const nowKst = getNowKstTimestamp();
+    return {
+      koreanDate: nowKst.koreanDate,
+      compactDateTime: nowKst.compactDateTime,
+      fromPhoto: false,
+    };
+  });
   const [zoomPhoto, setZoomPhoto] = useState<{
     url: string;
     title: string;
@@ -239,7 +261,9 @@ function WaterBillingApp() {
   const handlePhotoClear = useCallback((kind: PhotoKind) => {
     setPhotos((prev) => {
       const oldUrl = prev[kind].previewUrl;
+      const oldFocused = prev[kind].focusedPreviewUrl;
       if (oldUrl) URL.revokeObjectURL(oldUrl);
+      if (oldFocused && oldFocused !== oldUrl) URL.revokeObjectURL(oldFocused);
       return {
         ...prev,
         [kind]: { ...INITIAL_PHOTO_STATE },
@@ -247,25 +271,73 @@ function WaterBillingApp() {
     });
   }, []);
 
+  const handlePhotoRotate = useCallback(async (kind: PhotoKind) => {
+    const current = photos[kind];
+    if (!current.previewUrl) return;
+    try {
+      const nextFull = await rotatePhotoUrlCw90(current.previewUrl);
+      const nextFocused = current.focusedPreviewUrl
+        ? await rotatePhotoUrlCw90(current.focusedPreviewUrl)
+        : null;
+      setPhotos((prev) => {
+        const oldFull = prev[kind].previewUrl;
+        const oldFocused = prev[kind].focusedPreviewUrl;
+        if (oldFull) URL.revokeObjectURL(oldFull);
+        if (oldFocused && oldFocused !== oldFull) URL.revokeObjectURL(oldFocused);
+        return {
+          ...prev,
+          [kind]: {
+            ...prev[kind],
+            previewUrl: nextFull,
+            focusedPreviewUrl: nextFocused,
+          },
+        };
+      });
+    } catch {
+      // Ignore transient canvas rotate errors
+    }
+  }, [photos]);
+
   const handlePhotoSelect = useCallback(
     async (kind: PhotoKind, file: File) => {
       setJustSaved(false);
       const previewUrl = URL.createObjectURL(file);
 
+      // Extract capture timestamp in KST (EXIF DateTimeOriginal -> file.lastModified -> now)
+      const kstTs = await extractPhotoTimestampKst(file);
+      setKstDateInfo({
+        koreanDate: kstTs.koreanDate,
+        compactDateTime: kstTs.compactDateTime,
+        fromPhoto: true,
+      });
+      setInputs((prev) => ({
+        ...prev,
+        ym: kstTs.ym,
+        monthLabel: ymToKoreanLabel(kstTs.ym),
+      }));
+
       setPhotos((prev) => {
         if (prev[kind].previewUrl) {
           URL.revokeObjectURL(prev[kind].previewUrl!);
+        }
+        if (
+          prev[kind].focusedPreviewUrl &&
+          prev[kind].focusedPreviewUrl !== prev[kind].previewUrl
+        ) {
+          URL.revokeObjectURL(prev[kind].focusedPreviewUrl!);
         }
         return {
           ...prev,
           [kind]: {
             previewUrl,
+            focusedPreviewUrl: null,
             status: 'processing',
             message: '사진에서 숫자를 읽고 있어요...',
             progress: 12,
             detectedSummary: null,
             alternateValue: null,
             note: null,
+            capturedAtKst: kstTs.compactDateTime,
           },
         };
       });
@@ -293,16 +365,29 @@ function WaterBillingApp() {
           }
         );
 
+        // Automatically rotate upright and create focused comparison preview
+        let alignedFullUrl = previewUrl;
+        let alignedFocusedUrl: string | null = null;
+        if (res.uprightRotateCw !== 0 || res.counterBox) {
+          try {
+            const aligned = await createAlignedPhotoPreviews(
+              previewUrl,
+              res.uprightRotateCw,
+              res.counterBox,
+              kind
+            );
+            alignedFullUrl = aligned.uprightUrl;
+            alignedFocusedUrl = aligned.focusedUrl;
+            if (alignedFullUrl !== previewUrl) {
+              URL.revokeObjectURL(previewUrl);
+            }
+          } catch {
+            // Keep original previewUrl if alignment fails
+          }
+        }
+
         if (kind === 'bill') {
           const foundParts: string[] = [];
-          if (res.billingYm) {
-            const nextLabel = ymToKoreanLabel(res.billingYm);
-            setInputs((prev) => ({
-              ...prev,
-              ym: res.billingYm!,
-              monthLabel: nextLabel,
-            }));
-          }
           if (res.amount != null) {
             setInputs((prev) => ({ ...prev, billAmount: String(res.amount) }));
             setAutoFilledFields((prev) => ({ ...prev, billAmount: true }));
@@ -318,6 +403,8 @@ function WaterBillingApp() {
             ...prev,
             [kind]: {
               ...prev[kind],
+              previewUrl: alignedFullUrl,
+              focusedPreviewUrl: alignedFocusedUrl,
               status: foundParts.length > 0 ? 'done' : 'error',
               progress: 100,
               detectedSummary:
@@ -351,6 +438,8 @@ function WaterBillingApp() {
               ...prev,
               [kind]: {
                 ...prev[kind],
+                previewUrl: alignedFullUrl,
+                focusedPreviewUrl: alignedFocusedUrl,
                 status: 'done',
                 progress: 100,
                 detectedSummary: String(res.meterValue),
@@ -364,6 +453,8 @@ function WaterBillingApp() {
               ...prev,
               [kind]: {
                 ...prev[kind],
+                previewUrl: alignedFullUrl,
+                focusedPreviewUrl: alignedFocusedUrl,
                 status: 'error',
                 progress: 100,
                 detectedSummary: null,
@@ -652,12 +743,14 @@ function WaterBillingApp() {
             autoFilledFields={autoFilledFields}
             photos={photos}
             calc={calc}
+            kstDateInfo={kstDateInfo}
             saving={saving}
             justSaved={justSaved}
             isCloudSynced={Boolean(user)}
             onInputChange={handleInputChange}
             onPhotoSelect={handlePhotoSelect}
             onPhotoClear={handlePhotoClear}
+            onPhotoRotate={handlePhotoRotate}
             onPhotoZoom={(url, title) => setZoomPhoto({ url, title })}
             onClearCurrentMonth={handleClearCurrentMonth}
             onSaveToDb={handleSaveToDb}

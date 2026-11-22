@@ -40,9 +40,13 @@ export function formatUsage(val: number): string {
 }
 
 export function getCurrentYm(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === 'year')?.value ?? String(new Date().getFullYear());
+  const m = parts.find((p) => p.type === 'month')?.value ?? String(new Date().getMonth() + 1).padStart(2, '0');
   return `${y}-${m}`;
 }
 

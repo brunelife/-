@@ -15,6 +15,10 @@ export interface OcrAnalyzeResponse {
   alternateValue?: number | null;
   rawDigits?: string | null;
   rotationDegrees?: number | null;
+  /** Exact clockwise rotation (0 | 90 | 180 | 270) to apply to the original image so text/digits read upright left-to-right */
+  uprightRotateCw: 0 | 90 | 180 | 270;
+  /** Normalized [ymin, xmin, ymax, xmax] (0..1000) bounding box on the ORIGINAL unrotated image around the key digits/table */
+  counterBox?: [number, number, number, number] | null;
   amount?: number | null;
   usage?: number | null;
   billingYm?: string | null;
@@ -219,13 +223,29 @@ CRITICAL RULES FOR KOREAN WATER METERS:
    - A previous month reference number may be provided only as weak context.
    - Water meters are sometimes replaced with a brand-new meter starting near 0 (e.g., previous was 2870, new meter reads 00060). ALWAYS trust what is physically printed on the black drums in the photo.
 
-6. OUTPUT STYLE:
-   - Keep "note" very short and warm in plain Korean suitable for a 65-year-old user (under 32 Korean characters, e.g., "검은 숫자창 0778 확인", "끝자리 6→7 넘어가는 중").`;
+6. AUTOMATIC UPRIGHT ORIENTATION ("textTopDirection") & COUNTER BOUNDING BOX ("counterBox"):
+   - We will automatically rotate and crop the photo so an elderly user can read the digits comfortably upright left-to-right.
+   - Instead of computing a rotation angle, simply report "textTopDirection" — which edge of the ORIGINAL photo the TOP of the digits and Korean letters points toward:
+     * VISUAL ANCHOR FOR KOREAN WATER METERS: On Korean water meters, the "m³" / "KC" / "유효기간" area is on the TOP side of the black digit window, and the "만 천 백 십 일" or "천 백 십 일" labels are on the BOTTOM side of the black digit window!
+     * "UP": Already upright ("m³" is ABOVE the black digits, "천 백 십 일" is BELOW the black digits).
+     * "LEFT": Sideways with top pointing LEFT ("m³" is to the LEFT of the black digits, "천 백 십 일" is to the RIGHT of the black digits).
+     * "RIGHT": Sideways with top pointing RIGHT ("m³" is to the RIGHT of the black digits, "만 천 백 십 일" is to the LEFT of the black digits).
+     * "DOWN": Upside-down ("만 천 백 십 일" is ABOVE the black digits, "m³" / "유효기간" is BELOW the black digits).
+   - Provide "counterBox": [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL (unrotated) image tightly enclosing the black roller digit window PLUS its immediately adjacent "만 천 백 십 일" / "m³" labels so every digit is fully inside the box.
+
+7. OUTPUT STYLE:
+   - Keep "note" very short and warm in plain Korean suitable for a 65-year-old user (under 32 Korean characters, e.g., "검은 숫자창 0778 확인", "끝자리 6→7 넘어가는 중 (1317 자동 적용)").`;
 
 const BILL_SYSTEM_INSTRUCTION = `You are a specialist reader for South Korean municipal water & sewage utility bills (상·하수도 요금 및 물이용부담금 고지서 / 영수증, such as 화성특례시, 서울시, 경기도 시군 수도요금 고지서).
 
 CRITICAL EXTRACTION RULES:
-1. ORIENTATION: Mentally orient the bill upright even if rotated or angled.
+1. ORIENTATION ("textTopDirection") & SUMMARY BOX ("counterBox"):
+   - Report "textTopDirection" ("UP", "DOWN", "LEFT", or "RIGHT") = which edge of the ORIGINAL image the TOP of the printed Korean letters points toward:
+     * "UP": Already upright (header at top, text reads left-to-right).
+     * "LEFT": Sideways, header on the left edge, top of letters points LEFT.
+     * "RIGHT": Sideways, header on the right edge, top of letters points RIGHT.
+     * "DOWN": Upside-down, header at the bottom edge.
+   - Provide "counterBox": [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL (unrotated) image enclosing the main summary table showing "납기내금액" and "사용량" clearly.
 2. AMOUNT ("amount" - integer KRW):
    - Extract the on-time total billed amount: "납기내금액", "납부하실 금액", or the grand total "합계" (e.g., 56060).
    - Cross-verify across multiple places on the bill: the top-left summary ("납기내금액 1건, 56,060원"), the center breakdown table ("납기내금액 ... 56,060 원" and "합계 56,060"), and the bottom OCR/GIRO strip where the amount is often encoded.
@@ -261,11 +281,17 @@ const METER_RESPONSE_SCHEMA = {
       description:
         'Exact digits visible in the black counter window including leading zeros, e.g. "0778" or "00060".',
     },
-    rotationDegrees: {
-      type: Type.INTEGER,
+    textTopDirection: {
+      type: Type.STRING,
+      description:
+        'Which edge of the ORIGINAL photo the top of the digits and Korean labels points toward: "UP", "DOWN", "LEFT", or "RIGHT". (Hint: m3 side is the top of digits; 만천백십일 side is the bottom of digits.)',
+    },
+    counterBox: {
+      type: Type.ARRAY,
+      items: { type: Type.INTEGER },
       nullable: true,
       description:
-        'Detected rotation of the meter in the photo in clockwise degrees: 0, 90, 180, or 270.',
+        'Bounding box [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL unrotated image covering the black counter window and adjacent Korean place labels.',
     },
     confidence: {
       type: Type.STRING,
@@ -277,7 +303,15 @@ const METER_RESPONSE_SCHEMA = {
         'Very short plain Korean summary for an elderly user (max 32 chars).',
     },
   },
-  required: ['meterValue', 'alternateValue', 'rawDigits', 'confidence', 'note'],
+  required: [
+    'meterValue',
+    'alternateValue',
+    'rawDigits',
+    'textTopDirection',
+    'counterBox',
+    'confidence',
+    'note',
+  ],
 };
 
 const BILL_RESPONSE_SCHEMA = {
@@ -308,6 +342,18 @@ const BILL_RESPONSE_SCHEMA = {
       nullable: true,
       description: 'Current meter reading printed on bill (당월지침), if present.',
     },
+    textTopDirection: {
+      type: Type.STRING,
+      description:
+        'Which edge of the ORIGINAL bill photo the top of the Korean text points toward: "UP", "DOWN", "LEFT", or "RIGHT".',
+    },
+    counterBox: {
+      type: Type.ARRAY,
+      items: { type: Type.INTEGER },
+      nullable: true,
+      description:
+        'Bounding box [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL image enclosing the main 납기내금액 and 사용량 section.',
+    },
     confidence: {
       type: Type.STRING,
       description: 'Confidence level: "high", "medium", or "low".',
@@ -318,7 +364,15 @@ const BILL_RESPONSE_SCHEMA = {
         'Very short plain Korean summary for an elderly user (max 32 chars).',
     },
   },
-  required: ['amount', 'usage', 'billingYm', 'confidence', 'note'],
+  required: [
+    'amount',
+    'usage',
+    'billingYm',
+    'textTopDirection',
+    'counterBox',
+    'confidence',
+    'note',
+  ],
 };
 
 function sanitizeConfidence(val: unknown): 'high' | 'medium' | 'low' {
@@ -341,6 +395,32 @@ function toFiniteNumOrNull(val: unknown, min: number, max: number): number | nul
   if (!Number.isFinite(n)) return null;
   if (n < min || n > max) return null;
   return Math.round(n * 10) / 10;
+}
+
+function mapTextTopDirectionToRotateCw(val: unknown): 0 | 90 | 180 | 270 {
+  if (typeof val === 'string') {
+    const dir = val.trim().toUpperCase();
+    if (dir === 'LEFT') return 90;
+    if (dir === 'DOWN') return 180;
+    if (dir === 'RIGHT') return 270;
+    if (dir === 'UP') return 0;
+  }
+  return 0;
+}
+
+function sanitizeCounterBox(
+  val: unknown
+): [number, number, number, number] | null {
+  if (!Array.isArray(val) || val.length !== 4) return null;
+  const nums = val.map((v) => Number(v));
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  const [rawY1, rawX1, rawY2, rawX2] = nums;
+  const ymin = Math.max(0, Math.min(1000, Math.round(Math.min(rawY1, rawY2))));
+  const ymax = Math.max(0, Math.min(1000, Math.round(Math.max(rawY1, rawY2))));
+  const xmin = Math.max(0, Math.min(1000, Math.round(Math.min(rawX1, rawX2))));
+  const xmax = Math.max(0, Math.min(1000, Math.round(Math.max(rawX1, rawX2))));
+  if (ymax - ymin < 20 || xmax - xmin < 20) return null;
+  return [ymin, xmin, ymax, xmax];
 }
 
 export async function analyzeWaterPhoto(
@@ -466,6 +546,8 @@ export async function analyzeWaterPhoto(
     }
 
     const confidence = sanitizeConfidence(parsed.confidence);
+    const uprightRotateCw = mapTextTopDirectionToRotateCw(parsed.textTopDirection);
+    const counterBox = sanitizeCounterBox(parsed.counterBox);
     const note =
       typeof parsed.note === 'string' && parsed.note.trim().length > 0
         ? parsed.note.trim().slice(0, 80)
@@ -487,6 +569,8 @@ export async function analyzeWaterPhoto(
         billingYm,
         billPrevReading,
         billCurrReading,
+        uprightRotateCw,
+        counterBox,
         confidence,
         note,
       };
@@ -521,14 +605,15 @@ export async function analyzeWaterPhoto(
       typeof parsed.rawDigits === 'string' && parsed.rawDigits.trim().length > 0
         ? parsed.rawDigits.trim().slice(0, 12)
         : null;
-    const rotationDegrees = toFiniteIntOrNull(parsed.rotationDegrees, 0, 360);
 
     return {
       kind: req.kind,
       meterValue,
       alternateValue,
       rawDigits,
-      rotationDegrees,
+      rotationDegrees: uprightRotateCw,
+      uprightRotateCw,
+      counterBox,
       confidence,
       note: finalNote,
     };

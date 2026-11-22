@@ -98,10 +98,12 @@ export interface SettlementCalculation {
 
 export interface PhotoUploadState {
   previewUrl: string | null;
+  focusedPreviewUrl?: string | null;
   status: 'idle' | 'processing' | 'done' | 'error';
   message: string;
   progress: number;
   detectedSummary: string | null;
   alternateValue?: number | null;
   note?: string | null;
+  capturedAtKst?: string | null;
 }
