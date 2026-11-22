@@ -199,7 +199,7 @@ export function prepareColorPhotoForOcr(
     const img = new Image();
     img.onload = () => {
       try {
-        const maxDim = 1600;
+        const maxDim = 1280;
         let w = img.naturalWidth || img.width;
         let h = img.naturalHeight || img.height;
         if (Math.max(w, h) > maxDim) {
@@ -222,7 +222,7 @@ export function prepareColorPhotoForOcr(
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
 
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
         URL.revokeObjectURL(objectUrl);
 
         const commaIdx = dataUrl.indexOf(',');

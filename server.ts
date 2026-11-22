@@ -6,7 +6,7 @@ import {
   analyzeWaterPhoto,
   OcrServiceError,
   type OcrAnalyzeRequest,
-} from './server/ocrService.ts';
+} from './api/ocr.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,6 +19,14 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.get('/api/ocr', (_req, res) => {
+    const key = process.env.GEMINI_API_KEY?.trim();
+    res.json({
+      ok: true,
+      hasApiKey: Boolean(key && key !== 'MY_GEMINI_API_KEY'),
+    });
   });
 
   app.post('/api/ocr', async (req, res) => {
