@@ -17,6 +17,7 @@ interface PhotoUploadCardProps {
   onFileSelected: (file: File) => void;
   onClear: () => void;
   onZoom: (url: string, title: string) => void;
+  onPickAlternate?: (value: number) => void;
 }
 
 export function PhotoUploadCard({
@@ -27,6 +28,7 @@ export function PhotoUploadCard({
   onFileSelected,
   onClear,
   onZoom,
+  onPickAlternate,
 }: PhotoUploadCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -140,9 +142,28 @@ export function PhotoUploadCard({
       )}
 
       {state.status === 'done' && (
-        <div className="rounded-xl bg-[#ECFDF3] border border-[#A6F4C5] p-3.5 flex items-start gap-2.5 text-base font-bold text-[#047857] leading-snug">
-          <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
-          <span>{state.message}</span>
+        <div className="rounded-xl bg-[#ECFDF3] border border-[#A6F4C5] p-3.5 space-y-2.5">
+          <div className="flex items-start gap-2.5 text-base font-bold text-[#047857] leading-snug">
+            <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p>{state.message}</p>
+              {state.note && (
+                <p className="text-sm font-semibold text-[#065F46]/90">
+                  {state.note}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {state.alternateValue != null && onPickAlternate && (
+            <button
+              type="button"
+              onClick={() => onPickAlternate(state.alternateValue!)}
+              className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-[#16A34A] bg-white hover:bg-[#DCFCE7] text-sm font-extrabold text-[#047857] transition-colors cursor-pointer"
+            >
+              끝자리가 넘어가는 중이라면 → {state.alternateValue}로 바꾸기
+            </button>
+          )}
         </div>
       )}
 

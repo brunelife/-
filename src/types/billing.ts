@@ -102,4 +102,6 @@ export interface PhotoUploadState {
   message: string;
   progress: number;
   detectedSummary: string | null;
+  alternateValue?: number | null;
+  note?: string | null;
 }

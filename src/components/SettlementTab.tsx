@@ -47,6 +47,7 @@ interface SettlementTabProps {
   onPhotoSelect: (kind: PhotoKind, file: File) => void;
   onPhotoClear: (kind: PhotoKind) => void;
   onPhotoZoom: (url: string, title: string) => void;
+  onPickAlternate: (kind: Exclude<PhotoKind, 'bill'>, value: number) => void;
   onClearCurrentMonth: () => void;
   onSaveToDb: () => void;
   onResetSavedFlag: () => void;
@@ -97,6 +98,7 @@ export function SettlementTab({
   onPhotoSelect,
   onPhotoClear,
   onPhotoZoom,
+  onPickAlternate,
   onClearCurrentMonth,
   onSaveToDb,
   onResetSavedFlag,
@@ -325,6 +327,15 @@ export function SettlementTab({
                 onFileSelected={(file) => onPhotoSelect(item.kind, file)}
                 onClear={() => onPhotoClear(item.kind)}
                 onZoom={onPhotoZoom}
+                onPickAlternate={
+                  item.kind !== 'bill'
+                    ? (val) =>
+                        onPickAlternate(
+                          item.kind as Exclude<PhotoKind, 'bill'>,
+                          val
+                        )
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -500,6 +511,19 @@ export function SettlementTab({
                 <Plus className="w-6 h-6" />
               </button>
             </div>
+            {photos.meter201.alternateValue != null &&
+              String(photos.meter201.alternateValue) !== inputs.curr201 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onPickAlternate('meter201', photos.meter201.alternateValue!)
+                  }
+                  className="mt-2.5 w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-[#BFDBFE] bg-[#EEF4FF] hover:bg-[#DCE8FF] text-sm font-extrabold text-[#1048B8] cursor-pointer"
+                >
+                  끝자리가 넘어가는 중이라면 → {photos.meter201.alternateValue}로
+                  바꾸기
+                </button>
+              )}
           </section>
 
           {/* 3) Unit 202 Meter */}
@@ -552,6 +576,19 @@ export function SettlementTab({
                 <Plus className="w-6 h-6" />
               </button>
             </div>
+            {photos.meter202.alternateValue != null &&
+              String(photos.meter202.alternateValue) !== inputs.curr202 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onPickAlternate('meter202', photos.meter202.alternateValue!)
+                  }
+                  className="mt-2.5 w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-[#BFDBFE] bg-[#EEF4FF] hover:bg-[#DCE8FF] text-sm font-extrabold text-[#1048B8] cursor-pointer"
+                >
+                  끝자리가 넘어가는 중이라면 → {photos.meter202.alternateValue}로
+                  바꾸기
+                </button>
+              )}
           </section>
 
           {/* 4) Building Total Meter */}
@@ -604,6 +641,19 @@ export function SettlementTab({
                 <Plus className="w-6 h-6" />
               </button>
             </div>
+            {photos.meterTot.alternateValue != null &&
+              String(photos.meterTot.alternateValue) !== inputs.currTotal && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onPickAlternate('meterTot', photos.meterTot.alternateValue!)
+                  }
+                  className="mt-2.5 w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-[#BFDBFE] bg-[#EEF4FF] hover:bg-[#DCE8FF] text-sm font-extrabold text-[#1048B8] cursor-pointer"
+                >
+                  끝자리가 넘어가는 중이라면 → {photos.meterTot.alternateValue}로
+                  바꾸기
+                </button>
+              )}
             {inputs.currTotal && inputs.curr201 && inputs.curr202 && (
               <p className="mt-2.5 text-[15px] font-bold text-[#334155]">
                 상가 사용량은 자동으로{' '}

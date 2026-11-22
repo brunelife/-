@@ -55,6 +55,8 @@ const INITIAL_PHOTO_STATE: PhotoUploadState = {
   message: '',
   progress: 0,
   detectedSummary: null,
+  alternateValue: null,
+  note: null,
 };
 
 function createInitialPhotos(): Record<PhotoKind, PhotoUploadState> {
@@ -262,6 +264,8 @@ function WaterBillingApp() {
             message: '사진에서 숫자를 읽고 있어요...',
             progress: 12,
             detectedSummary: null,
+            alternateValue: null,
+            note: null,
           },
         };
       });
@@ -291,6 +295,14 @@ function WaterBillingApp() {
 
         if (kind === 'bill') {
           const foundParts: string[] = [];
+          if (res.billingYm) {
+            const nextLabel = ymToKoreanLabel(res.billingYm);
+            setInputs((prev) => ({
+              ...prev,
+              ym: res.billingYm!,
+              monthLabel: nextLabel,
+            }));
+          }
           if (res.amount != null) {
             setInputs((prev) => ({ ...prev, billAmount: String(res.amount) }));
             setAutoFilledFields((prev) => ({ ...prev, billAmount: true }));
@@ -310,6 +322,8 @@ function WaterBillingApp() {
               progress: 100,
               detectedSummary:
                 foundParts.length > 0 ? foundParts.join(', ') : null,
+              alternateValue: null,
+              note: res.note || null,
               message:
                 foundParts.length > 0
                   ? `읽기 완료: ${foundParts.join(', ')}`
@@ -340,7 +354,9 @@ function WaterBillingApp() {
                 status: 'done',
                 progress: 100,
                 detectedSummary: String(res.meterValue),
-                message: `읽은 숫자: ${res.meterValue} (다음 화면에서 확인하세요)`,
+                alternateValue: res.alternateValue ?? null,
+                note: res.note || null,
+                message: `읽은 숫자: ${res.meterValue}${res.rawDigits && res.rawDigits !== String(res.meterValue) ? ` (${res.rawDigits})` : ''}`,
               },
             }));
           } else {
@@ -351,24 +367,71 @@ function WaterBillingApp() {
                 status: 'error',
                 progress: 100,
                 detectedSummary: null,
+                alternateValue: null,
+                note: res.note || null,
                 message: '숫자가 잘 안 보여요. 다음 화면에서 직접 적어주세요.',
               },
             }));
           }
         }
-      } catch {
+      } catch (err) {
+        const errMsg =
+          err instanceof Error && err.message.trim().length > 0
+            ? err.message.trim()
+            : '사진을 읽지 못했어요. 다음 화면에서 직접 적어주세요.';
         setPhotos((prev) => ({
           ...prev,
           [kind]: {
             ...prev[kind],
             status: 'error',
             progress: 100,
-            message: '사진을 읽지 못했어요. 다음 화면에서 직접 적어주세요.',
+            alternateValue: null,
+            note: null,
+            message: errMsg,
           },
         }));
       }
     },
     [inputs.prev201, inputs.prev202, inputs.prevTotal]
+  );
+
+  const handlePickAlternate = useCallback(
+    (kind: Exclude<PhotoKind, 'bill'>, value: number) => {
+      const fieldMap: Record<Exclude<PhotoKind, 'bill'>, keyof SettlementInputs> =
+        {
+          meter201: 'curr201',
+          meter202: 'curr202',
+          meterTot: 'currTotal',
+        };
+      const labelMap: Record<Exclude<PhotoKind, 'bill'>, string> = {
+        meter201: '201호',
+        meter202: '202호',
+        meterTot: '건물 전체',
+      };
+      const targetField = fieldMap[kind];
+      const previousVal = Number(inputs[targetField]);
+
+      setJustSaved(false);
+      setInputs((prev) => ({
+        ...prev,
+        [targetField]: String(value),
+      }));
+      setAutoFilledFields((prev) => ({ ...prev, [targetField]: true }));
+      setPhotos((prev) => ({
+        ...prev,
+        [kind]: {
+          ...prev[kind],
+          detectedSummary: String(value),
+          alternateValue:
+            Number.isFinite(previousVal) && previousVal !== value
+              ? previousVal
+              : null,
+          message: `읽은 숫자: ${value} (선택 변경됨)`,
+        },
+      }));
+      showToast(`${labelMap[kind]} 숫자를 ${value}(으)로 바꿨어요.`);
+    },
+    [inputs, showToast]
   );
 
   const handleClearCurrentMonth = useCallback(() => {
@@ -508,10 +571,23 @@ function WaterBillingApp() {
       await signInWithPopup(auth, googleProvider);
       showToast('구글 계정으로 안전하게 연결되었습니다.');
     } catch (err) {
-      const msg =
-        err instanceof Error && err.message.includes('popup-closed-by-user')
-          ? '로그인이 취소되었습니다.'
-          : '로그인 중 문제가 생겼습니다. 잠시 후 다시 눌러주세요.';
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code: unknown }).code)
+          : '';
+      let msg = '로그인 중 문제가 생겼습니다. 잠시 후 다시 눌러주세요.';
+      if (
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request'
+      ) {
+        msg = '로그인이 취소되었습니다.';
+      } else if (code === 'auth/unauthorized-domain') {
+        msg = `현재 주소(${window.location.hostname})가 Firebase 승인 도메인에 등록되지 않았습니다. 로그인 없이도 이 기기에서 바로 저장됩니다.`;
+      } else if (code === 'auth/popup-blocked') {
+        msg = '브라우저에서 로그인 창이 차단되었습니다. 팝업을 허용한 뒤 다시 눌러주세요.';
+      } else if (code) {
+        msg = `로그인 오류(${code})가 발생했습니다. 로그인 없이도 이 기기에서 바로 사용할 수 있습니다.`;
+      }
       showToast(msg, 'error');
     } finally {
       setAuthBusy(false);
@@ -622,6 +698,7 @@ function WaterBillingApp() {
             onPhotoSelect={handlePhotoSelect}
             onPhotoClear={handlePhotoClear}
             onPhotoZoom={(url, title) => setZoomPhoto({ url, title })}
+            onPickAlternate={handlePickAlternate}
             onClearCurrentMonth={handleClearCurrentMonth}
             onSaveToDb={handleSaveToDb}
             onResetSavedFlag={() => setJustSaved(false)}

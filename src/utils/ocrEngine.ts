@@ -1,50 +1,62 @@
-import Tesseract from 'tesseract.js';
 import type { PhotoKind } from '../types/billing';
 
 export interface OcrParseResult {
   amount?: number | null;
   usage?: number | null;
+  billingYm?: string | null;
+  billPrevReading?: number | null;
+  billCurrReading?: number | null;
   meterValue?: number | null;
+  alternateValue?: number | null;
+  rawDigits?: string | null;
+  rotationDegrees?: number | null;
+  confidence?: 'high' | 'medium' | 'low';
+  note?: string;
   rawText: string;
 }
 
 /**
- * Grayscale + contrast boost preprocessing for sharper meter and bill digit OCR.
+ * Resizes and compresses a smartphone photo in full color (JPEG) so the server-side
+ * vision model can clearly distinguish white-on-black meter rollers from red sub-dials
+ * while keeping mobile upload payload fast (~150-400KB).
  */
-export function preprocessImage(file: File): Promise<string> {
+export function prepareColorPhotoForOcr(
+  file: File
+): Promise<{ base64: string; mimeType: string }> {
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       try {
-        const maxDim = 1400;
-        let w = img.width;
-        let h = img.height;
+        const maxDim = 1600;
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
         if (Math.max(w, h) > maxDim) {
           const scale = maxDim / Math.max(w, h);
           w = Math.round(w * scale);
           h = Math.round(h * scale);
         }
+
         const canvas = document.createElement('canvas');
         canvas.width = w;
         canvas.height = h;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
           URL.revokeObjectURL(objectUrl);
-          reject(new Error('Canvas context unavailable'));
+          reject(new Error('이미지 처리 화면을 준비하지 못했습니다.'));
           return;
         }
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
-        const imgData = ctx.getImageData(0, 0, w, h);
-        const d = imgData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          const contrasted = Math.min(255, Math.max(0, (gray - 128) * 1.38 + 128));
-          d[i] = d[i + 1] = d[i + 2] = contrasted;
-        }
-        ctx.putImageData(imgData, 0, 0);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
         URL.revokeObjectURL(objectUrl);
-        resolve(canvas.toDataURL('image/png'));
+
+        const commaIdx = dataUrl.indexOf(',');
+        const base64 = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+        resolve({ base64, mimeType: 'image/jpeg' });
       } catch (err) {
         URL.revokeObjectURL(objectUrl);
         reject(err);
@@ -52,85 +64,10 @@ export function preprocessImage(file: File): Promise<string> {
     };
     img.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      reject(new Error('Failed to load image'));
+      reject(new Error('사진 파일을 열지 못했습니다. 다시 찍어주세요.'));
     };
     img.src = objectUrl;
   });
-}
-
-/**
- * Parses Korean water utility bill OCR output for billed amount (KRW) and water usage (m3).
- * Fixed regex quantifiers ({0,12}, {4,7}, {1,3}) compared to the original HTML prototype.
- */
-export function parseBillText(text: string): { amount: number | null; usage: number | null } {
-  const clean = text.replace(/,/g, '').replace(/\s+/g, ' ');
-  let amount: number | null = null;
-  let usage: number | null = null;
-
-  const amtPatterns = [
-    /(?:납기내\s*금액|납부하실\s*금액|합\s*계|당월\s*요금|청구\s*금액)[^\d]{0,16}(\d{4,7})/g,
-    /(\d{4,7})\s*원/g,
-  ];
-
-  for (const pat of amtPatterns) {
-    const matches = [...clean.matchAll(pat)];
-    if (matches.length > 0) {
-      const nums = matches
-        .map((m) => Number(m[1]))
-        .filter((n) => Number.isFinite(n) && n >= 5000 && n <= 2000000);
-      if (nums.length > 0) {
-        amount = nums[0];
-        break;
-      }
-    }
-  }
-
-  const usagePatterns = [
-    /사용량[^\d]{0,12}(\d{1,3}(?:\.\d)?)/,
-    /(\d{1,3}(?:\.\d)?)\s*(?:㎥|m3|톤)/i,
-  ];
-  for (const pat of usagePatterns) {
-    const m = clean.match(pat);
-    if (m) {
-      const val = Number(m[1]);
-      if (Number.isFinite(val) && val > 0 && val <= 500) {
-        usage = val;
-        break;
-      }
-    }
-  }
-
-  return { amount, usage };
-}
-
-/**
- * Extracts the most plausible water meter reading near prevRef.
- * Fixed regex quantifier (\d{3,5}) compared to the original HTML prototype.
- */
-export function parseMeterText(text: string, prevRef: number): number | null {
-  const cleaned = text.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1');
-  const digits = cleaned.match(/\d{3,5}/g) || [];
-  const candidates = digits
-    .map((d) => Number(d))
-    .filter((n) => Number.isFinite(n) && n > 0 && n < 100000);
-
-  if (candidates.length === 0) return null;
-
-  if (prevRef > 0) {
-    const plausible = candidates.filter((n) => n >= prevRef && n <= prevRef + 250);
-    if (plausible.length > 0) {
-      plausible.sort((a, b) => a - prevRef - (b - prevRef));
-      return plausible[0];
-    }
-    const nearPrev = candidates.filter((n) => Math.abs(n - prevRef) <= 500);
-    if (nearPrev.length > 0) {
-      nearPrev.sort((a, b) => Math.abs(a - prevRef) - Math.abs(b - prevRef));
-      return nearPrev[0];
-    }
-  }
-
-  const fourDigit = candidates.filter((n) => n >= 100 && n <= 9999);
-  return fourDigit.length > 0 ? fourDigit[0] : candidates[0];
 }
 
 export async function runPhotoOcr(
@@ -139,31 +76,81 @@ export async function runPhotoOcr(
   prevRef: number,
   onProgress?: (pct: number) => void
 ): Promise<OcrParseResult> {
-  const dataUrl = await preprocessImage(file);
-  const lang = kind === 'bill' ? 'kor+eng' : 'eng';
+  onProgress?.(15);
+  const { base64, mimeType } = await prepareColorPhotoForOcr(file);
+  onProgress?.(38);
 
-  const result = await Tesseract.recognize(dataUrl, lang, {
-    logger: (m) => {
-      if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-        onProgress?.(Math.round(m.progress * 100));
-      }
-    },
-  });
+  let currentPct = 38;
+  const timer = window.setInterval(() => {
+    currentPct = Math.min(90, currentPct + 8);
+    onProgress?.(currentPct);
+  }, 450);
 
-  const rawText = result.data.text || '';
+  try {
+    const response = await fetch('/api/ocr', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        kind,
+        imageBase64: base64,
+        mimeType,
+        prevRef: prevRef > 0 ? prevRef : undefined,
+      }),
+    });
 
-  if (kind === 'bill') {
-    const parsed = parseBillText(rawText);
+    const contentType = response.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    const payload = isJson ? await response.json() : null;
+
+    if (!response.ok) {
+      const serverMsg =
+        payload && typeof payload.error === 'string' && payload.error.trim()
+          ? payload.error.trim()
+          : `사진 분석 서버 오류 (${response.status})`;
+      throw new Error(serverMsg);
+    }
+
+    onProgress?.(100);
+
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('사진 분석 결과를 받지 못했습니다.');
+    }
+
     return {
-      amount: parsed.amount,
-      usage: parsed.usage,
-      rawText,
+      amount: typeof payload.amount === 'number' ? payload.amount : null,
+      usage: typeof payload.usage === 'number' ? payload.usage : null,
+      billingYm: typeof payload.billingYm === 'string' ? payload.billingYm : null,
+      billPrevReading:
+        typeof payload.billPrevReading === 'number'
+          ? payload.billPrevReading
+          : null,
+      billCurrReading:
+        typeof payload.billCurrReading === 'number'
+          ? payload.billCurrReading
+          : null,
+      meterValue:
+        typeof payload.meterValue === 'number' ? payload.meterValue : null,
+      alternateValue:
+        typeof payload.alternateValue === 'number'
+          ? payload.alternateValue
+          : null,
+      rawDigits: typeof payload.rawDigits === 'string' ? payload.rawDigits : null,
+      rotationDegrees:
+        typeof payload.rotationDegrees === 'number'
+          ? payload.rotationDegrees
+          : null,
+      confidence: payload.confidence,
+      note: typeof payload.note === 'string' ? payload.note : '',
+      rawText:
+        typeof payload.rawDigits === 'string'
+          ? payload.rawDigits
+          : typeof payload.note === 'string'
+            ? payload.note
+            : '',
     };
+  } finally {
+    window.clearInterval(timer);
   }
-
-  const meterValue = parseMeterText(rawText, prevRef);
-  return {
-    meterValue,
-    rawText,
-  };
 }
