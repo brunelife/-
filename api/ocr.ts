@@ -1,6 +1,6 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
-export type OcrPhotoKind = 'meter201' | 'meter202' | 'meterTot' | 'bill';
+export type OcrPhotoKind = 'meter201' | 'meter202' | 'meterTot' | 'bill' | 'auto';
 
 export interface OcrAnalyzeRequest {
   kind: OcrPhotoKind;
@@ -11,6 +11,10 @@ export interface OcrAnalyzeRequest {
 
 export interface OcrAnalyzeResponse {
   kind: OcrPhotoKind;
+  /** True visual document type detected from the pixels ("meter" or "bill"), even if uploaded to the wrong slot */
+  detectedType: 'meter' | 'bill';
+  /** Number of black integer roller drums on a water meter (4 for "천 백 십 일" sub-meters, 5 for "만 천 백 십 일" main meters) */
+  meterDigitCount?: number | null;
   meterValue?: number | null;
   alternateValue?: number | null;
   rawDigits?: string | null;
@@ -45,6 +49,7 @@ const VALID_KINDS = new Set<OcrPhotoKind>([
   'meter202',
   'meterTot',
   'bill',
+  'auto',
 ]);
 
 const VALID_MIME_TYPES = new Set<string>([
@@ -57,8 +62,10 @@ const VALID_MIME_TYPES = new Set<string>([
 ]);
 
 const MAX_BASE64_CHARS = 16 * 1024 * 1024;
-const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
-const FALLBACK_GEMINI_MODEL = 'gemini-3.1-flash-lite';
+export const PRIMARY_GEMINI_MODEL = 'gemini-3.1-flash-lite';
+export const FALLBACK_GEMINI_MODEL = 'gemini-4-hydrogen';
+const PRIMARY_TIMEOUT_MS = 14_000;
+const FALLBACK_TIMEOUT_MS = 22_000;
 
 let cachedClient: GoogleGenAI | null = null;
 let cachedApiKey: string | undefined;
@@ -153,6 +160,14 @@ function classifyGeminiError(err: unknown): OcrServiceError {
     );
   }
 
+  if (status === 504 || upper.includes('TIMEOUT') || upper.includes('TIMED OUT')) {
+    return new OcrServiceError(
+      504,
+      'UPSTREAM_TIMEOUT',
+      '사진 분석 응답이 지연되었습니다. 잠시 후 다시 시도하거나 다음 화면에서 숫자를 직접 적어주세요.'
+    );
+  }
+
   return new OcrServiceError(
     502,
     'UPSTREAM_ERROR',
@@ -160,198 +175,202 @@ function classifyGeminiError(err: unknown): OcrServiceError {
   );
 }
 
-function isRetryableError(err: unknown): boolean {
+function shouldFailoverToFallback(err: unknown): boolean {
+  if (err instanceof OcrServiceError) {
+    return (
+      err.code === 'UPSTREAM_TIMEOUT' ||
+      err.status === 429 ||
+      err.status === 502 ||
+      err.status === 503 ||
+      err.status === 504
+    );
+  }
   const status = getErrorStatus(err);
-  if (status !== null) {
-    return status >= 500 || status === 408 || status === 429;
+  if (status === 400 || status === 401 || status === 403) {
+    return false;
+  }
+  if (
+    status === 404 ||
+    status === 408 ||
+    status === 429 ||
+    (status !== null && status >= 500)
+  ) {
+    return true;
   }
   const msg = getErrorMessage(err).toUpperCase();
   return (
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('NOT_FOUND') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('TIMEOUT') ||
+    msg.includes('TIMED OUT') ||
     msg.includes('FETCH FAILED') ||
     msg.includes('ECONNRESET') ||
     msg.includes('ETIMEDOUT') ||
-    msg.includes('NETWORK') ||
-    msg.includes('UNAVAILABLE')
+    msg.includes('NETWORK')
   );
 }
 
-async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 2): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt >= maxAttempts || !isRetryableError(err)) {
-        throw err;
-      }
-      const status = getErrorStatus(err);
-      const delayMs = status === 429 ? 2000 : 500 * attempt;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  modelName: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new OcrServiceError(
+              504,
+              'UPSTREAM_TIMEOUT',
+              `사진 분석 모델(${modelName}) 응답이 시간 초과되었습니다.`
+            )
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
     }
   }
-  throw lastErr;
 }
 
-const METER_SYSTEM_INSTRUCTION = `You are a specialist computer-vision reader for South Korean residential and commercial mechanical water meters (수도계량기).
-Your sole job is to read the exact integer cubic-meter (m³) reading from the black mechanical roller drum counter window.
+const UNIFIED_WATER_SYSTEM_INSTRUCTION = `You are a specialist computer-vision reader for South Korean water billing: BOTH mechanical water meters (수도계량기) AND municipal water utility bills (상·하수도 요금 및 물이용부담금 고지서 / 영수증).
 
-CRITICAL RULES FOR KOREAN WATER METERS:
+STEP 0 — FIRST CLASSIFY THE ACTUAL IMAGE ("detectedType"):
+- Users (especially elderly users) sometimes upload a water bill into a meter slot, or a water meter into the bill slot, or upload all photos at once.
+- ALWAYS inspect the actual pixels and set "detectedType" to:
+  * "bill": if the image is a paper/screen utility bill / receipt (고지서/영수증 with 납기내금액, 사용량, 상수도/하수도 table).
+  * "meter": if the image is a mechanical water meter dial (수도계량기 with black rolling integer drums and red circular pointer dials).
+
+=== IF detectedType === "meter" ===
 1. ORIENTATION FIRST:
-   - Photos are frequently taken rotated 90° clockwise, 90° counter-clockwise, or 180° upside-down.
-   - Locate the Korean place-value labels near the counter window: "만 천 백 십 일" (5-digit main meter) or "천 백 십 일" (4-digit sub-meter), plus the "m³" or "㎥" unit label and brand markings.
-   - Mentally rotate the image upright so "만"/"천" is on the LEFT and "일" is on the RIGHT, and every digit is right-side-up before reading left-to-right!
-
+   - Photos are frequently taken rotated 90° CW, 90° CCW, or 180° upside-down.
+   - Locate "만 천 백 십 일" (5-digit main meter) or "천 백 십 일" (4-digit sub-meter) and the "m³" mark. Mentally orient upright so "만"/"천" is LEFT and "일" is RIGHT before reading digits left-to-right!
 2. READ ONLY THE BLACK MECHANICAL ROLLER WINDOW:
-   - The true reading is ALWAYS the row of 4 or 5 white digits on black (or dark) rolling drums inside the rectangular counter window.
-   - Leading zeros exist on the drums (e.g., "0778" -> meterValue: 778, "00060" -> meterValue: 60, "02870" -> meterValue: 2870).
-   - Return rawDigits with exact leading zeros (e.g., "0778", "00060", "1316") and meterValue as the integer value.
-
+   - Read ONLY the row of 4 or 5 white digits on black (dark) rolling drums inside the rectangular counter window.
+   - Leading zeros exist on the drums (e.g., "0778" -> meterValue: 778, meterDigitCount: 4; "00060" -> meterValue: 60, meterDigitCount: 5; "02870" -> meterValue: 2870, meterDigitCount: 5; "1316" -> meterValue: 1316, meterDigitCount: 4).
+   - Set "meterDigitCount" to the exact count of black integer drums (4 if "천 백 십 일", 5 if "만 천 백 십 일").
+   - Return "rawDigits" with exact leading zeros (e.g., "00060", "0778", "1316") and "meterValue" as the integer.
 3. STRICTLY IGNORE DISTRACTING NUMBERS:
-   - Ignore red circular pointer dials (×0.1, ×0.01, ×0.001, ×0.0001).
-   - Ignore printed technical specs on the white dial face: Q3: 1.6m³/h, Q2/Q1: 4-2/100, Q1: 0.016-5/100, 15mm, 20mm, 1.0MPa, MPI-1-07-46, serial numbers on the brass rim.
-
+   - Ignore red circular pointer dials (×0.1, ×0.01, ×0.001, ×0.0001) and printed specs (Q3, Q2/Q1, 15mm, 20mm, 1.0MPa, serial numbers on brass rim).
 4. ROLLING / TRANSITIONING RIGHTMOST DIGIT ("일" place):
-   - Many Korean meters have a slightly taller/notched window on the rightmost digit ("일" place) where two consecutive digits can be seen as the wheel rolls (e.g., "8" with "9" peeking underneath, "6" with "7" peeking, or "2" with "3" peeking).
-   - IMPORTANT USER RULE: Whenever the rightmost drum is visibly rolling/transitioning between N and N+1 (i.e., the next digit N+1 is already visibly entering the window), ALWAYS pick the NEXT / HIGHER integer (N+1) as "meterValue"!
-   - Example: if "0778" shows "9" entering below "8", return meterValue: 779, alternateValue: 778, note: "끝자리 8→9 넘어가는 중 (779 자동 적용)".
-   - Example: if "1316" shows "7" entering below "6", return meterValue: 1317, alternateValue: 1316, note: "끝자리 6→7 넘어가는 중 (1317 자동 적용)".
-   - If the rightmost digit is cleanly settled with no next digit rolling in, return that exact integer as meterValue and set alternateValue to null.
-
+   - Many Korean meters have a taller/notched window on the rightmost digit ("일") where TWO consecutive digits (N and N+1) are visibly stacked as the drum rolls (e.g., 2→3, 6→7, 8→9).
+   - IMPORTANT USER RULE: Whenever TWO consecutive digits (N and N+1) are visibly stacked in the rightmost ("일") column, ALWAYS pick the NEXT / HIGHER integer (N+1) as "meterValue" and set "alternateValue" to N!
+   - Example: "0778" with "9" entering below "8" -> meterValue: 779, alternateValue: 778, note: "끝자리 8→9 넘어가는 중 (779 자동 적용)".
+   - Example: "1316" with "7" entering below "6" -> meterValue: 1317, alternateValue: 1316, note: "끝자리 6→7 넘어가는 중 (1317 자동 적용)".
+   - If cleanly settled with only a single digit centered, set alternateValue to null.
 5. DO NOT HALLUCINATE FROM PREVIOUS READING:
-   - A previous month reference number may be provided only as weak context.
-   - Water meters are sometimes replaced with a brand-new meter starting near 0 (e.g., previous was 2870, new meter reads 00060). ALWAYS trust what is physically printed on the black drums in the photo.
+   - ALWAYS trust what is physically printed on the black drums in the photo (even if a meter was replaced or uploaded to the wrong slot!).
+6. AUTOMATIC UPRIGHT ORIENTATION ("counterBox", "redDialsBox", "placeLabelsSide"):
+   - ALL boxes use [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL UNROTATED image (ymin=0 top, ymax=1000 bottom, xmin=0 left, xmax=1000 right).
+   - "counterBox": tight box around ONLY the black rectangular digit drum window.
+   - "redDialsBox": box enclosing the cluster of RED circular pointer dials (or the Korean 만/천/백/십/일 label strip if red dials are cropped out).
+   - "placeLabelsSide": looking directly at the ORIGINAL UNROTATED image, which side of the black digit window do the red circular dials and Korean 만/천/백/십/일 labels sit on? ("BELOW", "RIGHT", "ABOVE", or "LEFT").
+   - Set bill fields (amount, usage, billingYm, billPrevReading, billCurrReading, textTopDirection) to null.
 
-6. AUTOMATIC UPRIGHT ORIENTATION ("textTopDirection") & COUNTER BOUNDING BOX ("counterBox"):
-   - We will automatically rotate and crop the photo so an elderly user can read the digits comfortably upright left-to-right.
-   - Instead of computing a rotation angle, simply report "textTopDirection" — which edge of the ORIGINAL photo the TOP of the digits and Korean letters points toward:
-     * VISUAL ANCHOR FOR KOREAN WATER METERS: On Korean water meters, the "m³" / "KC" / "유효기간" area is on the TOP side of the black digit window, and the "만 천 백 십 일" or "천 백 십 일" labels are on the BOTTOM side of the black digit window!
-     * "UP": Already upright ("m³" is ABOVE the black digits, "천 백 십 일" is BELOW the black digits).
-     * "LEFT": Sideways with top pointing LEFT ("m³" is to the LEFT of the black digits, "천 백 십 일" is to the RIGHT of the black digits).
-     * "RIGHT": Sideways with top pointing RIGHT ("m³" is to the RIGHT of the black digits, "만 천 백 십 일" is to the LEFT of the black digits).
-     * "DOWN": Upside-down ("만 천 백 십 일" is ABOVE the black digits, "m³" / "유효기간" is BELOW the black digits).
-   - Provide "counterBox": [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL (unrotated) image tightly enclosing the black roller digit window PLUS its immediately adjacent "만 천 백 십 일" / "m³" labels so every digit is fully inside the box.
-
-7. OUTPUT STYLE:
-   - Keep "note" very short and warm in plain Korean suitable for a 65-year-old user (under 32 Korean characters).`;
-
-const BILL_SYSTEM_INSTRUCTION = `You are a specialist reader for South Korean municipal water & sewage utility bills (상·하수도 요금 및 물이용부담금 고지서 / 영수증, such as 화성특례시, 서울시, 경기도 시군 수도요금 고지서).
-
-CRITICAL EXTRACTION RULES:
+=== IF detectedType === "bill" ===
 1. ORIENTATION ("textTopDirection") & SUMMARY BOX ("counterBox"):
-   - Report "textTopDirection" ("UP", "DOWN", "LEFT", or "RIGHT") = which edge of the ORIGINAL image the TOP of the printed Korean letters points toward:
-     * "UP": Already upright (header at top, text reads left-to-right).
-     * "LEFT": Sideways, header on the left edge, top of letters points LEFT.
-     * "RIGHT": Sideways, header on the right edge, top of letters points RIGHT.
-     * "DOWN": Upside-down, header at the bottom edge.
-   - Provide "counterBox": [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL (unrotated) image enclosing the main summary table showing "납기내금액" and "사용량" clearly.
+   - "textTopDirection": which edge of the ORIGINAL bill image the top of the printed Korean letters points toward ("UP", "DOWN", "LEFT", or "RIGHT").
+   - "counterBox": [ymin, xmin, ymax, xmax] (0..1000) on the ORIGINAL image enclosing the main summary table showing "납기내금액" and "사용량".
 2. AMOUNT ("amount" - integer KRW):
-   - Extract the on-time total billed amount: "납기내금액", "납부하실 금액", or the grand total "합계" (e.g., 56060).
-   - Cross-verify across multiple places on the bill: the top-left summary, the center breakdown table, and the bottom OCR/GIRO strip.
-   - Do NOT pick "납기후금액" (late fee amount) when "납기내금액" is present.
+   - Extract the on-time total billed amount ("납기내금액", "납부하실 금액", or "합계", e.g., 56060 or 149930). Do NOT pick "납기후금액".
 3. USAGE ("usage" - number in m³):
-   - Extract the billed water consumption labeled "사용량" (e.g., 22).
-   - Distinguish "사용량" carefully from "당월지침", "전월지침", and "건수" (1건).
+   - Extract billed water consumption labeled "사용량" (e.g., 22 or 61). Distinguish from 당월지침, 전월지침, 건수.
 4. BILLING YEAR-MONTH ("billingYm"):
-   - If the header clearly states the billing month (e.g., "2026년 10월 고지분" -> "2026-10"), return "YYYY-MM". Otherwise null.
+   - Extract "YYYY-MM" if clearly printed (e.g., "2026년 11월 고지분" -> "2026-11"), else null.
 5. METER READINGS ON BILL ("billPrevReading", "billCurrReading"):
-   - Extract "전월지침" and "당월지침" if printed on the bill, otherwise null.
-6. OUTPUT STYLE:
-   - Keep "note" very short and clear in plain Korean (under 32 Korean characters).`;
+   - Extract "전월지침" and "당월지침" if printed, else null.
+   - Set meter fields (meterValue, alternateValue, rawDigits, meterDigitCount, redDialsBox, placeLabelsSide) to null.
 
-const METER_RESPONSE_SCHEMA = {
+OUTPUT STYLE:
+- Keep "note" very short and warm in plain Korean suitable for a 65-year-old user (under 32 Korean characters).`;
+
+const UNIFIED_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
+    detectedType: {
+      type: Type.STRING,
+      description: 'Actual image type: "meter" (water meter dial) or "bill" (water utility bill).',
+    },
     meterValue: {
       type: Type.INTEGER,
       nullable: true,
       description:
-        'Primary integer m3 reading from the black roller window (leading zeros stripped), or null if unreadable.',
+        'If detectedType is "meter": integer m3 reading from the black roller window (leading zeros stripped), else null.',
     },
     alternateValue: {
       type: Type.INTEGER,
       nullable: true,
       description:
-        'If the rightmost rolling drum is mid-transition between two digits, provide the adjacent integer value; otherwise null.',
+        'If rightmost rolling drum is mid-transition between N and N+1, the adjacent integer value; else null.',
     },
     rawDigits: {
       type: Type.STRING,
       nullable: true,
       description:
-        'Exact digits visible in the black counter window including leading zeros, e.g. "0778" or "00060".',
+        'Exact digits visible in the black counter window including leading zeros, e.g. "0778", "00060", "1316"; else null.',
     },
-    textTopDirection: {
-      type: Type.STRING,
+    meterDigitCount: {
+      type: Type.INTEGER,
+      nullable: true,
       description:
-        'Which edge of the ORIGINAL photo the top of the digits and Korean labels points toward: "UP", "DOWN", "LEFT", or "RIGHT".',
+        'Count of black integer drums on the water meter: 4 for "천 백 십 일" sub-meter, 5 for "만 천 백 십 일" main meter; else null.',
     },
     counterBox: {
       type: Type.ARRAY,
       items: { type: Type.INTEGER },
       nullable: true,
       description:
-        'Bounding box [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL unrotated image covering the black counter window and adjacent Korean place labels.',
+        'Bounding box [ymin, xmin, ymax, xmax] in 0..1000 on ORIGINAL unrotated image: tightly around ONLY the black digit drum window (for meter) or around 납기내금액/사용량 table (for bill).',
     },
-    confidence: {
-      type: Type.STRING,
-      description: 'Confidence level: "high", "medium", or "low".',
-    },
-    note: {
-      type: Type.STRING,
+    redDialsBox: {
+      type: Type.ARRAY,
+      items: { type: Type.INTEGER },
+      nullable: true,
       description:
-        'Very short plain Korean summary for an elderly user (max 32 chars).',
+        'For meter: bounding box [ymin, xmin, ymax, xmax] in 0..1000 on ORIGINAL unrotated image enclosing the red circular pointer dials (or Korean 만/천/백/십/일 label strip). Null for bill.',
     },
-  },
-  required: [
-    'meterValue',
-    'alternateValue',
-    'rawDigits',
-    'textTopDirection',
-    'counterBox',
-    'confidence',
-    'note',
-  ],
-};
-
-const BILL_RESPONSE_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
+    placeLabelsSide: {
+      type: Type.STRING,
+      nullable: true,
+      description:
+        'For meter: in the ORIGINAL unrotated image, which side of the black digit window the red dials and Korean 만/천/백/십/일 labels sit on: "BELOW", "ABOVE", "RIGHT", or "LEFT". Null for bill.',
+    },
     amount: {
       type: Type.INTEGER,
       nullable: true,
-      description: 'On-time billed total amount in KRW (납기내금액 / 합계).',
+      description: 'If detectedType is "bill": on-time total amount in KRW (납기내금액 / 합계); else null.',
     },
     usage: {
       type: Type.NUMBER,
       nullable: true,
-      description: 'Billed water usage in cubic meters (사용량).',
+      description: 'If detectedType is "bill": billed water usage in m3 (사용량); else null.',
     },
     billingYm: {
       type: Type.STRING,
       nullable: true,
-      description: 'Billing year-month in YYYY-MM format if clearly visible.',
+      description: 'If detectedType is "bill": billing year-month YYYY-MM if visible; else null.',
     },
     billPrevReading: {
       type: Type.INTEGER,
       nullable: true,
-      description: 'Previous meter reading printed on bill (전월지침), if present.',
+      description: 'If detectedType is "bill": previous meter reading (전월지침) if printed; else null.',
     },
     billCurrReading: {
       type: Type.INTEGER,
       nullable: true,
-      description: 'Current meter reading printed on bill (당월지침), if present.',
+      description: 'If detectedType is "bill": current meter reading (당월지침) if printed; else null.',
     },
     textTopDirection: {
       type: Type.STRING,
-      description:
-        'Which edge of the ORIGINAL bill photo the top of the Korean text points toward: "UP", "DOWN", "LEFT", or "RIGHT".',
-    },
-    counterBox: {
-      type: Type.ARRAY,
-      items: { type: Type.INTEGER },
       nullable: true,
       description:
-        'Bounding box [ymin, xmin, ymax, xmax] in 0..1000 normalized coordinates on the ORIGINAL image enclosing the main 납기내금액 and 사용량 section.',
+        'For bill: which edge of the ORIGINAL image the top of the Korean text points toward: "UP", "DOWN", "LEFT", or "RIGHT". Null for meter.',
     },
     confidence: {
       type: Type.STRING,
@@ -364,10 +383,7 @@ const BILL_RESPONSE_SCHEMA = {
     },
   },
   required: [
-    'amount',
-    'usage',
-    'billingYm',
-    'textTopDirection',
+    'detectedType',
     'counterBox',
     'confidence',
     'note',
@@ -405,6 +421,39 @@ function mapTextTopDirectionToRotateCw(val: unknown): 0 | 90 | 180 | 270 {
     if (dir === 'UP') return 0;
   }
   return 0;
+}
+
+function mapPlaceLabelsSideToRotateCw(val: unknown): 0 | 90 | 180 | 270 | null {
+  if (typeof val === 'string') {
+    const side = val.trim().toUpperCase();
+    if (side === 'BELOW' || side === 'BOTTOM' || side === 'DOWN') return 0;
+    if (side === 'RIGHT') return 90;
+    if (side === 'ABOVE' || side === 'TOP' || side === 'UP') return 180;
+    if (side === 'LEFT') return 270;
+  }
+  return null;
+}
+
+function resolveMeterRotateCw(
+  counterBox: [number, number, number, number] | null,
+  redDialsBox: [number, number, number, number] | null,
+  placeLabelsSide: unknown
+): 0 | 90 | 180 | 270 {
+  if (counterBox && redDialsBox) {
+    const counterCy = (counterBox[0] + counterBox[2]) / 2;
+    const counterCx = (counterBox[1] + counterBox[3]) / 2;
+    const dialsCy = (redDialsBox[0] + redDialsBox[2]) / 2;
+    const dialsCx = (redDialsBox[1] + redDialsBox[3]) / 2;
+    const dx = dialsCx - counterCx;
+    const dy = dialsCy - counterCy;
+    if (Math.hypot(dx, dy) >= 35) {
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        return dy >= 0 ? 0 : 180;
+      }
+      return dx >= 0 ? 90 : 270;
+    }
+  }
+  return mapPlaceLabelsSideToRotateCw(placeLabelsSide) ?? 0;
 }
 
 function sanitizeCounterBox(
@@ -460,23 +509,9 @@ export async function analyzeWaterPhoto(
   }
 
   const ai = getGeminiClient();
-  const isBill = req.kind === 'bill';
-
-  const meterLabelMap: Record<Exclude<OcrPhotoKind, 'bill'>, string> = {
-    meter201: '201호 세대 수도계량기 (보통 4자리 천·백·십·일 검은 숫자창)',
-    meter202: '202호 세대 수도계량기 (보통 4자리 천·백·십·일 검은 숫자창)',
-    meterTot: '건물 전체 메인 수도계량기 (보통 5자리 만·천·백·십·일 검은 숫자창)',
-  };
-
-  const prevRefHint =
-    !isBill && typeof req.prevRef === 'number' && Number.isFinite(req.prevRef) && req.prevRef > 0
-      ? `참고용 지난달 지침은 ${req.prevRef}입니다. 단, 계량기가 새것으로 교체되어 0 근처부터 다시 시작할 수도 있으니 반드시 사진 속 검은 숫자창의 실제 숫자만 그대로 읽으세요.`
-      : '';
 
   const userPrompt =
-    req.kind === 'bill'
-      ? '이 한국 수도세 고지서(영수증) 사진에서 납기내금액(원), 사용량(㎥), 고지 연월(YYYY-MM), 전월지침, 당월지침을 정확히 읽어 JSON으로 반환하세요.'
-      : `이 사진은 ${meterLabelMap[req.kind]}입니다. 먼저 "만 천 백 십 일" 또는 "천 백 십 일" 글자와 m³ 표시 방향을 보고 사진을 똑바로 세운 뒤, 검은색 회전 숫자창의 흰색 정수 숫자만 왼쪽에서 오른쪽으로 정확히 읽어 JSON으로 반환하세요. ${prevRefHint}`;
+    '이 사진이 한국 수도계량기인지 수도세 고지서(영수증)인지 먼저 판별(detectedType)하세요. 수도계량기라면 만·천·백·십·일 자릿수(4자리 또는 5자리)와 검은색 회전 숫자창의 실제 정수 숫자, 그리고 counterBox·redDialsBox·placeLabelsSide를 정확히 읽으세요. 수도세 고지서라면 납기내금액(원), 사용량(㎥), 고지 연월(YYYY-MM), 전월지침, 당월지침, textTopDirection, counterBox를 정확히 읽어 JSON으로 반환하세요. 사용자가 다른 칸에 잘못 올렸을 수도 있으니 오직 사진 속 실제 내용만 그대로 읽으세요.';
 
   const callVisionModel = (model: string) =>
     ai.models.generateContent({
@@ -493,11 +528,9 @@ export async function analyzeWaterPhoto(
         ],
       },
       config: {
-        systemInstruction: isBill
-          ? BILL_SYSTEM_INSTRUCTION
-          : METER_SYSTEM_INSTRUCTION,
+        systemInstruction: UNIFIED_WATER_SYSTEM_INSTRUCTION,
         responseMimeType: 'application/json',
-        responseSchema: isBill ? BILL_RESPONSE_SCHEMA : METER_RESPONSE_SCHEMA,
+        responseSchema: UNIFIED_RESPONSE_SCHEMA,
         thinkingConfig: {
           thinkingLevel: ThinkingLevel.LOW,
         },
@@ -507,23 +540,37 @@ export async function analyzeWaterPhoto(
   try {
     let response;
     try {
-      response = await withRetry(() => callVisionModel(PRIMARY_GEMINI_MODEL), 2);
+      response = await withTimeout(
+        callVisionModel(PRIMARY_GEMINI_MODEL),
+        PRIMARY_TIMEOUT_MS,
+        PRIMARY_GEMINI_MODEL
+      );
     } catch (primaryErr) {
-      const primaryStatus = getErrorStatus(primaryErr);
-      const primaryMsg = getErrorMessage(primaryErr).toUpperCase();
-      if (
-        primaryStatus === 429 ||
-        primaryStatus === 404 ||
-        primaryMsg.includes('RESOURCE_EXHAUSTED') ||
-        primaryMsg.includes('NOT_FOUND')
-      ) {
+      if (shouldFailoverToFallback(primaryErr)) {
+        const primaryStatus = getErrorStatus(primaryErr);
         console.warn(
-          `[OCR] ${PRIMARY_GEMINI_MODEL} unavailable (${primaryStatus ?? 'ERR'}), switching to ${FALLBACK_GEMINI_MODEL}`
+          `[OCR] ${PRIMARY_GEMINI_MODEL} failed (${primaryStatus ?? 'ERR'}), switching immediately to ${FALLBACK_GEMINI_MODEL}`
         );
-        response = await withRetry(
-          () => callVisionModel(FALLBACK_GEMINI_MODEL),
-          2
-        );
+        try {
+          response = await withTimeout(
+            callVisionModel(FALLBACK_GEMINI_MODEL),
+            FALLBACK_TIMEOUT_MS,
+            FALLBACK_GEMINI_MODEL
+          );
+        } catch (fallbackErr) {
+          if (shouldFailoverToFallback(fallbackErr)) {
+            console.warn(
+              `[OCR] ${FALLBACK_GEMINI_MODEL} also failed, retrying ${PRIMARY_GEMINI_MODEL} once`
+            );
+            response = await withTimeout(
+              callVisionModel(PRIMARY_GEMINI_MODEL),
+              PRIMARY_TIMEOUT_MS,
+              PRIMARY_GEMINI_MODEL
+            );
+          } else {
+            throw fallbackErr;
+          }
+        }
       } else {
         throw primaryErr;
       }
@@ -549,9 +596,26 @@ export async function analyzeWaterPhoto(
       );
     }
 
+    const rawDetectedType =
+      typeof parsed.detectedType === 'string'
+        ? parsed.detectedType.trim().toLowerCase()
+        : '';
+    const detectedType: 'meter' | 'bill' =
+      rawDetectedType === 'bill'
+        ? 'bill'
+        : rawDetectedType === 'meter'
+          ? 'meter'
+          : req.kind === 'bill'
+            ? 'bill'
+            : 'meter';
+    const isBill = detectedType === 'bill';
+
     const confidence = sanitizeConfidence(parsed.confidence);
-    const uprightRotateCw = mapTextTopDirectionToRotateCw(parsed.textTopDirection);
     const counterBox = sanitizeCounterBox(parsed.counterBox);
+    const redDialsBox = !isBill ? sanitizeCounterBox(parsed.redDialsBox) : null;
+    const uprightRotateCw = isBill
+      ? mapTextTopDirectionToRotateCw(parsed.textTopDirection)
+      : resolveMeterRotateCw(counterBox, redDialsBox, parsed.placeLabelsSide);
     const note =
       typeof parsed.note === 'string' && parsed.note.trim().length > 0
         ? parsed.note.trim().slice(0, 80)
@@ -568,6 +632,8 @@ export async function analyzeWaterPhoto(
 
       return {
         kind: req.kind,
+        detectedType: 'bill',
+        meterDigitCount: null,
         amount,
         usage,
         billingYm,
@@ -608,8 +674,19 @@ export async function analyzeWaterPhoto(
         ? parsed.rawDigits.trim().slice(0, 12)
         : null;
 
+    const digitsOnlyLen = rawDigits ? rawDigits.replace(/\D/g, '').length : 0;
+    const explicitDigitCount = toFiniteIntOrNull(parsed.meterDigitCount, 3, 6);
+    const meterDigitCount =
+      explicitDigitCount === 4 || explicitDigitCount === 5
+        ? explicitDigitCount
+        : digitsOnlyLen === 4 || digitsOnlyLen === 5
+          ? digitsOnlyLen
+          : null;
+
     return {
       kind: req.kind,
+      detectedType: 'meter',
+      meterDigitCount,
       meterValue,
       alternateValue,
       rawDigits,
@@ -631,6 +708,7 @@ export async function analyzeWaterPhoto(
 interface NodeLikeRequest extends AsyncIterable<Uint8Array | string> {
   method?: string;
   body?: unknown;
+  readableEnded?: boolean;
 }
 
 interface NodeLikeResponse {
@@ -657,9 +735,16 @@ function sendJson(res: NodeLikeResponse, statusCode: number, data: unknown) {
 async function readJsonBody(req: NodeLikeRequest): Promise<unknown> {
   if (req.body !== undefined && req.body !== null) {
     if (typeof req.body === 'string') {
-      return JSON.parse(req.body);
+      try {
+        return JSON.parse(req.body);
+      } catch {
+        throw new OcrServiceError(400, 'INVALID_JSON', '요청 형식이 올바르지 않습니다.');
+      }
     }
     return req.body;
+  }
+  if (req.readableEnded) {
+    return {};
   }
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -667,10 +752,14 @@ async function readJsonBody(req: NodeLikeRequest): Promise<unknown> {
   }
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return {};
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new OcrServiceError(400, 'INVALID_JSON', '요청 본문을 해석하지 못했습니다.');
+  }
 }
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export default async function handler(
   req: NodeLikeRequest,
@@ -681,6 +770,9 @@ export default async function handler(
     sendJson(res, 200, {
       ok: true,
       hasApiKey: Boolean(key && key !== 'MY_GEMINI_API_KEY'),
+      primaryModel: PRIMARY_GEMINI_MODEL,
+      fallbackModel: FALLBACK_GEMINI_MODEL,
+      maxDuration,
     });
     return;
   }

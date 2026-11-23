@@ -117,12 +117,35 @@ export function calculateSettlement(
   const hasCurr201 = inputs.curr201.trim() !== '' && Number.isFinite(curr201);
   const hasCurr202 = inputs.curr202.trim() !== '' && Number.isFinite(curr202);
 
-  const uTot = hasCurrTot && Number.isFinite(prevTot) ? round1(currTot - prevTot) : 0;
+  const meterReplacedApplied = Boolean(
+    inputs.totalMeterReplaced && hasCurrTot && Number.isFinite(billVol) && billVol > 0
+  );
+
+  const uTot = meterReplacedApplied
+    ? round1(billVol)
+    : hasCurrTot && Number.isFinite(prevTot)
+      ? round1(currTot - prevTot)
+      : 0;
   const u201 = hasCurr201 && Number.isFinite(prev201) ? round1(curr201 - prev201) : 0;
   const u202 = hasCurr202 && Number.isFinite(prev202) ? round1(curr202 - prev202) : 0;
   const uShop = hasCurrTot && hasCurr201 && hasCurr202 ? round1(uTot - (u201 + u202)) : 0;
 
-  const { widest } = computeStats(records);
+  const priorRecords = inputs.ym
+    ? records.filter((r) => r.ym < inputs.ym)
+    : records;
+  const { widest } = computeStats(
+    priorRecords.length > 0 ? priorRecords : records
+  );
+
+  const allZeroUsage =
+    hasCurrTot &&
+    hasCurr201 &&
+    hasCurr202 &&
+    uTot === 0 &&
+    u201 === 0 &&
+    u202 === 0 &&
+    Number.isFinite(billAmt) &&
+    billAmt > 0;
 
   const baseVol = billVol > 0 ? billVol : uTot;
   const isReady =
@@ -132,24 +155,43 @@ export function calculateSettlement(
     hasCurr201 &&
     hasCurr202 &&
     baseVol > 0 &&
+    !allZeroUsage &&
     Number.isFinite(u201) &&
     Number.isFinite(u202) &&
     Number.isFinite(uShop);
 
   const warnings: string[] = [];
+  if (allZeroUsage) {
+    warnings.push(
+      '이번 달 계량기 숫자 3개가 지난달 기준 숫자와 모두 똑같아 사용량이 전부 0㎥로 계산되었습니다. 이미 저장된 기록이거나 지난달 기준 숫자가 바뀌었는지 확인해 주세요.'
+    );
+  }
+  if (inputs.totalMeterReplaced && (!Number.isFinite(billVol) || billVol <= 0)) {
+    warnings.push(
+      '계량기 교체 정산은 고지서 사용량(㎥)이 필요합니다. 위 ①번 칸에 고지서 사용량을 입력해 주세요.'
+    );
+  }
   if (
-    (hasCurrTot && currTot < prevTot) ||
+    (!inputs.totalMeterReplaced && hasCurrTot && currTot < prevTot) ||
     (hasCurr201 && curr201 < prev201) ||
     (hasCurr202 && curr202 < prev202)
   ) {
-    warnings.push('당월 계량기 숫자가 전월 기준값보다 작습니다. 숫자를 다시 확인해 주세요.');
+    warnings.push(
+      '당월 계량기 숫자가 전월 기준값보다 작습니다. 새 계량기로 교체된 경우 아래에서 「새 계량기 교체」를 선택하거나 숫자를 다시 확인해 주세요.'
+    );
   }
   if (hasCurrTot && hasCurr201 && hasCurr202 && uShop < 0) {
     warnings.push(
       `상가 사용량이 음수(${formatUsage(uShop)}㎥)로 계산되었습니다. 전체·201호·202호 계량기 숫자를 확인해 주세요.`
     );
   }
-  if (billVol > 0 && hasCurrTot && Math.abs(billVol - uTot) >= 5) {
+  if (
+    !allZeroUsage &&
+    !meterReplacedApplied &&
+    billVol > 0 &&
+    hasCurrTot &&
+    Math.abs(billVol - uTot) >= 5
+  ) {
     warnings.push(
       `고지서 사용량(${formatUsage(billVol)}㎥)과 건물 전체 계량기 사용량(${formatUsage(uTot)}㎥)의 차이가 ${formatUsage(Math.abs(billVol - uTot))}㎥입니다.`
     );
@@ -158,10 +200,15 @@ export function calculateSettlement(
   if (!isReady) {
     return {
       isReady: false,
+      allZeroUsage,
       uTot,
       u201,
       u202,
       uShop,
+      billedU201: u201,
+      billedU202: u202,
+      billedUShop: uShop,
+      addedUsage: 0,
       billAmt: Number.isFinite(billAmt) ? billAmt : 0,
       baseVol: Number.isFinite(baseVol) ? baseVol : 0,
       unitPrice: 0,
@@ -180,6 +227,7 @@ export function calculateSettlement(
       currTot: hasCurrTot ? currTot : 0,
       curr201: hasCurr201 ? curr201 : 0,
       curr202: hasCurr202 ? curr202 : 0,
+      meterReplacedApplied,
     };
   }
 
@@ -196,21 +244,50 @@ export function calculateSettlement(
   const shortfall = billAmt - baseSum;
   let added = 0;
 
+  let billedU201 = u201;
+  let billedU202 = u202;
+  let billedUShop = uShop;
+  let addedUsage = 0;
+
   if (shortfall > 0) {
     added = ceil500(shortfall);
-    if (widest === '201호') a201 += added;
-    else if (widest === '202호') a202 += added;
-    else aShop += added;
+    if (widest === '201호') {
+      a201 += added;
+      if (unitPrice > 0) {
+        const targetU = Math.max(u201, round1(a201 / unitPrice));
+        addedUsage = round1(targetU - u201);
+        billedU201 = targetU;
+      }
+    } else if (widest === '202호') {
+      a202 += added;
+      if (unitPrice > 0) {
+        const targetU = Math.max(u202, round1(a202 / unitPrice));
+        addedUsage = round1(targetU - u202);
+        billedU202 = targetU;
+      }
+    } else {
+      aShop += added;
+      if (unitPrice > 0) {
+        const targetU = Math.max(uShop, round1(aShop / unitPrice));
+        addedUsage = round1(targetU - uShop);
+        billedUShop = targetU;
+      }
+    }
   }
 
   const finalSum = a201 + a202 + aShop;
 
   return {
     isReady: true,
+    allZeroUsage: false,
     uTot,
     u201,
     u202,
     uShop,
+    billedU201,
+    billedU202,
+    billedUShop,
+    addedUsage,
     billAmt,
     baseVol,
     unitPrice,
@@ -229,6 +306,7 @@ export function calculateSettlement(
     currTot,
     curr201,
     curr202,
+    meterReplacedApplied,
   };
 }
 
@@ -242,9 +320,9 @@ export function buildUnitMessages(
   const acctLine = acct ? `\n입금 계좌: ${acct}` : '';
 
   return {
-    '201호': `[${label} 수도세 안내]\n201호 사용량: ${formatUsage(calc.u201)}㎥ / 청구금액: ${formatWon(calc.a201)}${acctLine}`,
-    '202호': `[${label} 수도세 안내]\n202호 사용량: ${formatUsage(calc.u202)}㎥ / 청구금액: ${formatWon(calc.a202)}${acctLine}`,
-    '상가': `[${label} 상가 수도세 정산]\n상가 사용량: ${formatUsage(calc.uShop)}㎥ / 정산금액: ${formatWon(calc.aShop)}${acctLine}`,
+    '201호': `[${label} 수도세 안내]\n201호 사용량: ${formatUsage(calc.billedU201)}㎥ / 청구금액: ${formatWon(calc.a201)}${acctLine}`,
+    '202호': `[${label} 수도세 안내]\n202호 사용량: ${formatUsage(calc.billedU202)}㎥ / 청구금액: ${formatWon(calc.a202)}${acctLine}`,
+    '상가': `[${label} 상가 수도세 정산]\n상가 사용량: ${formatUsage(calc.billedUShop)}㎥ / 정산금액: ${formatWon(calc.aShop)}${acctLine}`,
   };
 }
 

@@ -13,7 +13,12 @@ import {
   writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { BASE_RECORDS, DEFAULT_SETTINGS } from '../data/baseRecords';
+import {
+  BASE_RECORDS,
+  DEFAULT_SETTINGS,
+  LEGACY_2024_SETTINGS,
+  LEGACY_2026_VIRTUAL_SETTINGS,
+} from '../data/baseRecords';
 import {
   VALIDATION_LIMITS,
   type BillingRecord,
@@ -22,8 +27,31 @@ import {
 } from '../types/billing';
 import { db, handleFirestoreError, OperationType } from './firebase';
 
-const LOCAL_RECORDS_KEY = 'water_billing_records_v3';
-const LOCAL_SETTINGS_KEY = 'water_billing_settings_v3';
+const LOCAL_RECORDS_KEY = 'water_billing_records_v5';
+const LOCAL_SETTINGS_KEY = 'water_billing_settings_v5';
+const LEGACY_LOCAL_RECORDS_KEYS = [
+  'water_billing_records_v4',
+  'water_billing_records_v3',
+];
+const LEGACY_LOCAL_SETTINGS_KEYS = [
+  'water_billing_settings_v4',
+  'water_billing_settings_v3',
+];
+
+function isLegacyBaselineSettings(
+  prevTotal: number | undefined,
+  prev201: number | undefined,
+  prev202: number | undefined
+): boolean {
+  return (
+    (prevTotal === LEGACY_2024_SETTINGS.prevTotal &&
+      prev201 === LEGACY_2024_SETTINGS.prev201 &&
+      prev202 === LEGACY_2024_SETTINGS.prev202) ||
+    (prevTotal === LEGACY_2026_VIRTUAL_SETTINGS.prevTotal &&
+      prev201 === LEGACY_2026_VIRTUAL_SETTINGS.prev201 &&
+      prev202 === LEGACY_2026_VIRTUAL_SETTINGS.prev202)
+  );
+}
 
 function clampNumber(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return min;
@@ -67,6 +95,23 @@ export function loadLocalRecords(): BillingRecord[] {
         return parsed as BillingRecord[];
       }
     }
+    // Seamless one-time migration from v4/v3: preserve user-saved records after 2026-10
+    for (const legacyKey of LEGACY_LOCAL_RECORDS_KEYS) {
+      const legacyRaw = localStorage.getItem(legacyKey);
+      if (legacyRaw) {
+        const legacyParsed = JSON.parse(legacyRaw);
+        if (Array.isArray(legacyParsed)) {
+          const extraUserRecords = (legacyParsed as BillingRecord[]).filter(
+            (r) => !r.isBaseRecord && typeof r.ym === 'string' && r.ym > '2026-10'
+          );
+          const merged = [...BASE_RECORDS, ...extraUserRecords].sort((a, b) =>
+            a.ym.localeCompare(b.ym)
+          );
+          saveLocalRecords(merged);
+          return merged;
+        }
+      }
+    }
   } catch {
     // ignore malformed local storage
   }
@@ -106,6 +151,39 @@ export function loadLocalSettings(): BillingSettings {
         seededBase: true,
       };
     }
+    // Seamless one-time migration from v4/v3: keep custom accountInfo, upgrade legacy 2276 or virtual 2893 baseline to real replaced meter 9
+    for (const legacyKey of LEGACY_LOCAL_SETTINGS_KEYS) {
+      const legacyRaw = localStorage.getItem(legacyKey);
+      if (legacyRaw) {
+        const parsed = JSON.parse(legacyRaw) as Partial<BillingSettings>;
+        const isLegacyBaseline = isLegacyBaselineSettings(
+          parsed.prevTotal,
+          parsed.prev201,
+          parsed.prev202
+        );
+        const migrated: BillingSettings = {
+          prevTotal:
+            !isLegacyBaseline && typeof parsed.prevTotal === 'number'
+              ? parsed.prevTotal
+              : DEFAULT_SETTINGS.prevTotal,
+          prev201:
+            !isLegacyBaseline && typeof parsed.prev201 === 'number'
+              ? parsed.prev201
+              : DEFAULT_SETTINGS.prev201,
+          prev202:
+            !isLegacyBaseline && typeof parsed.prev202 === 'number'
+              ? parsed.prev202
+              : DEFAULT_SETTINGS.prev202,
+          accountInfo:
+            typeof parsed.accountInfo === 'string' && parsed.accountInfo.trim()
+              ? parsed.accountInfo
+              : DEFAULT_SETTINGS.accountInfo,
+          seededBase: true,
+        };
+        saveLocalSettings(migrated);
+        return migrated;
+      }
+    }
   } catch {
     // ignore malformed local storage
   }
@@ -124,14 +202,88 @@ export function clearLocalStorage(): void {
   try {
     localStorage.removeItem(LOCAL_RECORDS_KEY);
     localStorage.removeItem(LOCAL_SETTINGS_KEY);
+    for (const k of LEGACY_LOCAL_RECORDS_KEYS) localStorage.removeItem(k);
+    for (const k of LEGACY_LOCAL_SETTINGS_KEYS) localStorage.removeItem(k);
   } catch {
     // ignore
   }
 }
 
+function buildFirestoreBaseRecordPayload(
+  uid: string,
+  r: BillingRecord,
+  nowTs: ReturnType<typeof serverTimestamp>
+) {
+  return {
+    ownerId: uid,
+    ym: sanitizeYm(r.ym),
+    monthLabel: sanitizeMonthLabel(r.monthLabel),
+    billAmount: sanitizeNullableNumber(
+      r.billAmount,
+      VALIDATION_LIMITS.AMOUNT_MIN,
+      VALIDATION_LIMITS.AMOUNT_MAX
+    ),
+    billUsage: sanitizeNullableNumber(
+      r.billUsage,
+      VALIDATION_LIMITS.BILL_USAGE_MIN,
+      VALIDATION_LIMITS.BILL_USAGE_MAX
+    ),
+    usageTotal: clampNumber(
+      r.usageTotal,
+      VALIDATION_LIMITS.USAGE_MIN,
+      VALIDATION_LIMITS.USAGE_MAX
+    ),
+    usage201: clampNumber(
+      r.usage201,
+      VALIDATION_LIMITS.USAGE_MIN,
+      VALIDATION_LIMITS.USAGE_MAX
+    ),
+    usage202: clampNumber(
+      r.usage202,
+      VALIDATION_LIMITS.USAGE_MIN,
+      VALIDATION_LIMITS.USAGE_MAX
+    ),
+    usageShop: clampNumber(
+      r.usageShop,
+      VALIDATION_LIMITS.USAGE_MIN,
+      VALIDATION_LIMITS.USAGE_MAX
+    ),
+    adjustmentTarget: sanitizeAdjustmentTarget(r.adjustmentTarget),
+    addedAmount: sanitizeNullableNumber(
+      r.addedAmount,
+      VALIDATION_LIMITS.AMOUNT_MIN,
+      VALIDATION_LIMITS.AMOUNT_MAX
+    ),
+    finalAmtSum: sanitizeNullableNumber(
+      r.finalAmtSum,
+      VALIDATION_LIMITS.AMOUNT_MIN,
+      VALIDATION_LIMITS.AMOUNT_MAX
+    ),
+    currTotal: sanitizeNullableNumber(
+      r.currTotal,
+      VALIDATION_LIMITS.METER_MIN,
+      VALIDATION_LIMITS.METER_MAX
+    ),
+    curr201: sanitizeNullableNumber(
+      r.curr201,
+      VALIDATION_LIMITS.METER_MIN,
+      VALIDATION_LIMITS.METER_MAX
+    ),
+    curr202: sanitizeNullableNumber(
+      r.curr202,
+      VALIDATION_LIMITS.METER_MIN,
+      VALIDATION_LIMITS.METER_MAX
+    ),
+    isBaseRecord: true,
+    createdAt: nowTs,
+    updatedAt: nowTs,
+  };
+}
+
 /**
- * Ensures /users/{uid}, /users/{uid}/settings/main, and initial 2021-2024 baseline records
- * exist atomically on first sign-in.
+ * Ensures /users/{uid}, /users/{uid}/settings/main, and full 2021-2026 baseline records
+ * exist atomically, and seamlessly upgrades existing 2021-2024 workspaces without touching
+ * newer user-saved settlements.
  */
 export async function ensureUserWorkspace(uid: string): Promise<void> {
   const userPath = `users/${uid}`;
@@ -145,6 +297,90 @@ export async function ensureUserWorkspace(uid: string): Promise<void> {
   }
 
   if (userSnap.exists()) {
+    const recordsPath = `users/${uid}/records`;
+    const settingsRef = doc(db, 'users', uid, 'settings', 'main');
+    let existingRecordsSnap;
+    let settingsSnap;
+    try {
+      [existingRecordsSnap, settingsSnap] = await Promise.all([
+        getDocs(
+          query(collection(db, 'users', uid, 'records'), where('ownerId', '==', uid))
+        ),
+        getDoc(settingsRef),
+      ]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, recordsPath);
+    }
+
+    const existingById = new Map<string, Record<string, unknown>>();
+    existingRecordsSnap.docs.forEach((d) => {
+      existingById.set(d.id, d.data());
+    });
+
+    const upgradeBatch = writeBatch(db);
+    const nowTs = serverTimestamp();
+    let pendingWrites = 0;
+
+    for (const r of BASE_RECORDS) {
+      const existingDoc = existingById.get(r.id);
+      const recRef = doc(db, 'users', uid, 'records', r.id);
+      if (!existingDoc) {
+        upgradeBatch.set(recRef, buildFirestoreBaseRecordPayload(uid, r, nowTs));
+        pendingWrites += 1;
+      } else if (
+        existingDoc.isBaseRecord === true &&
+        r.currTotal != null &&
+        (existingDoc.currTotal == null ||
+          Number(existingDoc.currTotal) !== r.currTotal)
+      ) {
+        upgradeBatch.update(recRef, {
+          currTotal: sanitizeNullableNumber(
+            r.currTotal,
+            VALIDATION_LIMITS.METER_MIN,
+            VALIDATION_LIMITS.METER_MAX
+          ),
+          curr201: sanitizeNullableNumber(
+            r.curr201,
+            VALIDATION_LIMITS.METER_MIN,
+            VALIDATION_LIMITS.METER_MAX
+          ),
+          curr202: sanitizeNullableNumber(
+            r.curr202,
+            VALIDATION_LIMITS.METER_MIN,
+            VALIDATION_LIMITS.METER_MAX
+          ),
+          updatedAt: nowTs,
+        });
+        pendingWrites += 1;
+      }
+    }
+
+    if (settingsSnap.exists()) {
+      const s = settingsSnap.data();
+      if (
+        isLegacyBaselineSettings(
+          Number(s.prevTotal),
+          Number(s.prev201),
+          Number(s.prev202)
+        )
+      ) {
+        upgradeBatch.update(settingsRef, {
+          prevTotal: DEFAULT_SETTINGS.prevTotal,
+          prev201: DEFAULT_SETTINGS.prev201,
+          prev202: DEFAULT_SETTINGS.prev202,
+          updatedAt: nowTs,
+        });
+        pendingWrites += 1;
+      }
+    }
+
+    if (pendingWrites > 0) {
+      try {
+        await upgradeBatch.commit();
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, recordsPath);
+      }
+    }
     return;
   }
 
@@ -171,58 +407,7 @@ export async function ensureUserWorkspace(uid: string): Promise<void> {
 
   for (const r of BASE_RECORDS) {
     const recRef = doc(db, 'users', uid, 'records', r.id);
-    batch.set(recRef, {
-      ownerId: uid,
-      ym: sanitizeYm(r.ym),
-      monthLabel: sanitizeMonthLabel(r.monthLabel),
-      billAmount: sanitizeNullableNumber(
-        r.billAmount,
-        VALIDATION_LIMITS.AMOUNT_MIN,
-        VALIDATION_LIMITS.AMOUNT_MAX
-      ),
-      billUsage: sanitizeNullableNumber(
-        r.billUsage,
-        VALIDATION_LIMITS.BILL_USAGE_MIN,
-        VALIDATION_LIMITS.BILL_USAGE_MAX
-      ),
-      usageTotal: clampNumber(
-        r.usageTotal,
-        VALIDATION_LIMITS.USAGE_MIN,
-        VALIDATION_LIMITS.USAGE_MAX
-      ),
-      usage201: clampNumber(
-        r.usage201,
-        VALIDATION_LIMITS.USAGE_MIN,
-        VALIDATION_LIMITS.USAGE_MAX
-      ),
-      usage202: clampNumber(
-        r.usage202,
-        VALIDATION_LIMITS.USAGE_MIN,
-        VALIDATION_LIMITS.USAGE_MAX
-      ),
-      usageShop: clampNumber(
-        r.usageShop,
-        VALIDATION_LIMITS.USAGE_MIN,
-        VALIDATION_LIMITS.USAGE_MAX
-      ),
-      adjustmentTarget: sanitizeAdjustmentTarget(r.adjustmentTarget),
-      addedAmount: sanitizeNullableNumber(
-        r.addedAmount,
-        VALIDATION_LIMITS.AMOUNT_MIN,
-        VALIDATION_LIMITS.AMOUNT_MAX
-      ),
-      finalAmtSum: sanitizeNullableNumber(
-        r.finalAmtSum,
-        VALIDATION_LIMITS.AMOUNT_MIN,
-        VALIDATION_LIMITS.AMOUNT_MAX
-      ),
-      currTotal: null,
-      curr201: null,
-      curr202: null,
-      isBaseRecord: true,
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    });
+    batch.set(recRef, buildFirestoreBaseRecordPayload(uid, r, nowTs));
   }
 
   try {
@@ -430,15 +615,74 @@ export async function updateAccountInfoCloud(
   }
 }
 
+export async function updatePrevBaselinesCloud(
+  uid: string,
+  prevBaselines: Pick<BillingSettings, 'prevTotal' | 'prev201' | 'prev202'>
+): Promise<void> {
+  const settingsPath = `users/${uid}/settings/main`;
+  try {
+    await updateDoc(doc(db, 'users', uid, 'settings', 'main'), {
+      prevTotal: clampNumber(
+        prevBaselines.prevTotal,
+        VALIDATION_LIMITS.METER_MIN,
+        VALIDATION_LIMITS.METER_MAX
+      ),
+      prev201: clampNumber(
+        prevBaselines.prev201,
+        VALIDATION_LIMITS.METER_MIN,
+        VALIDATION_LIMITS.METER_MAX
+      ),
+      prev202: clampNumber(
+        prevBaselines.prev202,
+        VALIDATION_LIMITS.METER_MIN,
+        VALIDATION_LIMITS.METER_MAX
+      ),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, settingsPath);
+  }
+}
+
 export async function deleteBillingRecordCloud(
   uid: string,
-  recordId: string
+  recordId: string,
+  fallbackPrev?: Pick<BillingSettings, 'prevTotal' | 'prev201' | 'prev202'> | null
 ): Promise<void> {
   const recordPath = `users/${uid}/records/${recordId}`;
+  const settingsPath = `users/${uid}/settings/main`;
   try {
-    await deleteDoc(doc(db, 'users', uid, 'records', recordId));
+    if (fallbackPrev) {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'users', uid, 'records', recordId));
+      batch.update(doc(db, 'users', uid, 'settings', 'main'), {
+        prevTotal: clampNumber(
+          fallbackPrev.prevTotal,
+          VALIDATION_LIMITS.METER_MIN,
+          VALIDATION_LIMITS.METER_MAX
+        ),
+        prev201: clampNumber(
+          fallbackPrev.prev201,
+          VALIDATION_LIMITS.METER_MIN,
+          VALIDATION_LIMITS.METER_MAX
+        ),
+        prev202: clampNumber(
+          fallbackPrev.prev202,
+          VALIDATION_LIMITS.METER_MIN,
+          VALIDATION_LIMITS.METER_MAX
+        ),
+        updatedAt: serverTimestamp(),
+      });
+      await batch.commit();
+    } else {
+      await deleteDoc(doc(db, 'users', uid, 'records', recordId));
+    }
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, recordPath);
+    handleFirestoreError(
+      error,
+      fallbackPrev ? OperationType.WRITE : OperationType.DELETE,
+      fallbackPrev ? `${recordPath} & ${settingsPath}` : recordPath
+    );
   }
 }
 
@@ -466,30 +710,56 @@ export async function resetLedgerToBaseCloud(uid: string): Promise<void> {
     }
   });
 
-  // Re-seed any missing baseline records
+  // Re-seed any missing baseline records and sync meter readings
   for (const r of BASE_RECORDS) {
-    if (existingIds.has(r.id)) continue;
     const recRef = doc(db, 'users', uid, 'records', r.id);
-    batch.set(recRef, {
-      ownerId: uid,
-      ym: r.ym,
-      monthLabel: r.monthLabel,
-      billAmount: r.billAmount,
-      billUsage: r.billUsage,
-      usageTotal: r.usageTotal,
-      usage201: r.usage201,
-      usage202: r.usage202,
-      usageShop: r.usageShop,
-      adjustmentTarget: r.adjustmentTarget,
-      addedAmount: r.addedAmount,
-      finalAmtSum: r.finalAmtSum,
-      currTotal: null,
-      curr201: null,
-      curr202: null,
-      isBaseRecord: true,
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    });
+    if (existingIds.has(r.id)) {
+      batch.update(recRef, {
+        billAmount: sanitizeNullableNumber(
+          r.billAmount,
+          VALIDATION_LIMITS.AMOUNT_MIN,
+          VALIDATION_LIMITS.AMOUNT_MAX
+        ),
+        billUsage: sanitizeNullableNumber(
+          r.billUsage,
+          VALIDATION_LIMITS.BILL_USAGE_MIN,
+          VALIDATION_LIMITS.BILL_USAGE_MAX
+        ),
+        usageTotal: r.usageTotal,
+        usage201: r.usage201,
+        usage202: r.usage202,
+        usageShop: r.usageShop,
+        adjustmentTarget: sanitizeAdjustmentTarget(r.adjustmentTarget),
+        addedAmount: sanitizeNullableNumber(
+          r.addedAmount,
+          VALIDATION_LIMITS.AMOUNT_MIN,
+          VALIDATION_LIMITS.AMOUNT_MAX
+        ),
+        finalAmtSum: sanitizeNullableNumber(
+          r.finalAmtSum,
+          VALIDATION_LIMITS.AMOUNT_MIN,
+          VALIDATION_LIMITS.AMOUNT_MAX
+        ),
+        currTotal: sanitizeNullableNumber(
+          r.currTotal,
+          VALIDATION_LIMITS.METER_MIN,
+          VALIDATION_LIMITS.METER_MAX
+        ),
+        curr201: sanitizeNullableNumber(
+          r.curr201,
+          VALIDATION_LIMITS.METER_MIN,
+          VALIDATION_LIMITS.METER_MAX
+        ),
+        curr202: sanitizeNullableNumber(
+          r.curr202,
+          VALIDATION_LIMITS.METER_MIN,
+          VALIDATION_LIMITS.METER_MAX
+        ),
+        updatedAt: nowTs,
+      });
+      continue;
+    }
+    batch.set(recRef, buildFirestoreBaseRecordPayload(uid, r, nowTs));
   }
 
   batch.update(doc(db, 'users', uid, 'settings', 'main'), {

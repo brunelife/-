@@ -1,6 +1,8 @@
 import type { PhotoKind } from '../types/billing';
 
 export interface OcrParseResult {
+  detectedType: 'meter' | 'bill';
+  meterDigitCount?: number | null;
   amount?: number | null;
   usage?: number | null;
   billingYm?: string | null;
@@ -139,9 +141,9 @@ export async function createAlignedPhotoPreviews(
     return { uprightUrl, focusedUrl: null };
   }
 
-  // Add generous breathing room so every digit + Korean label stays completely visible
-  const padX = Math.max(kind === 'bill' ? 0.05 : 0.06, boxW * (kind === 'bill' ? 0.12 : 0.28));
-  const padY = Math.max(kind === 'bill' ? 0.05 : 0.06, boxH * (kind === 'bill' ? 0.16 : 0.45));
+  // Add generous breathing room so every digit + adjacent m³ and 만/천/백/십/일 labels stay completely visible
+  const padX = Math.max(kind === 'bill' ? 0.05 : 0.08, boxW * (kind === 'bill' ? 0.12 : 0.35));
+  const padY = Math.max(kind === 'bill' ? 0.05 : 0.1, boxH * (kind === 'bill' ? 0.16 : 0.85));
 
   uMinX = Math.max(0, uMinX - padX);
   uMaxX = Math.min(1, uMaxX + padX);
@@ -187,6 +189,21 @@ export async function rotatePhotoUrlCw90(sourceUrl: string): Promise<string> {
 }
 
 /**
+ * Decodes a smartphone photo through canvas once so EXIF orientation is baked into
+ * raw pixels, guaranteeing 100% orientation match between OCR input and preview rotation.
+ */
+export async function normalizePhotoFileToUrl(file: File): Promise<string> {
+  const rawUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(rawUrl);
+    const canvas = renderRotatedCanvas(img, 0, 1600);
+    return await canvasToObjectUrl(canvas, 0.9);
+  } finally {
+    URL.revokeObjectURL(rawUrl);
+  }
+}
+
+/**
  * Resizes and compresses a smartphone photo in full color (JPEG) so the server-side
  * vision model can clearly distinguish white-on-black meter rollers from red sub-dials
  * while keeping mobile upload payload fast (~150-400KB).
@@ -199,7 +216,7 @@ export function prepareColorPhotoForOcr(
     const img = new Image();
     img.onload = () => {
       try {
-        const maxDim = 1280;
+        const maxDim = 1024;
         let w = img.naturalWidth || img.width;
         let h = img.naturalHeight || img.height;
         if (Math.max(w, h) > maxDim) {
@@ -222,7 +239,7 @@ export function prepareColorPhotoForOcr(
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
 
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         URL.revokeObjectURL(objectUrl);
 
         const commaIdx = dataUrl.indexOf(',');
@@ -255,7 +272,7 @@ function parseCounterBox(val: unknown): [number, number, number, number] | null 
 
 export async function runPhotoOcr(
   file: File,
-  kind: PhotoKind,
+  kind: PhotoKind | 'auto',
   prevRef: number,
   onProgress?: (pct: number) => void
 ): Promise<OcrParseResult> {
@@ -269,19 +286,35 @@ export async function runPhotoOcr(
     onProgress?.(currentPct);
   }, 450);
 
+  const controller = new AbortController();
+  const abortTimer = window.setTimeout(() => controller.abort(), 40_000);
+
   try {
-    const response = await fetch('/api/ocr', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        kind,
-        imageBase64: base64,
-        mimeType,
-        prevRef: prevRef > 0 ? prevRef : undefined,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch('/api/ocr', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          kind,
+          imageBase64: base64,
+          mimeType,
+          prevRef: prevRef > 0 ? prevRef : undefined,
+        }),
+      });
+    } catch (fetchErr) {
+      if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+        throw new Error(
+          '사진 분석 시간이 너무 오래 걸렸습니다. 인터넷 상태를 확인하고 다시 시도하거나 숫자를 직접 적어주세요.'
+        );
+      }
+      throw new Error(
+        '인터넷 연결이 잠시 끊어졌습니다. 다시 시도하거나 숫자를 직접 적어주세요.'
+      );
+    }
 
     const contentType = response.headers.get('content-type') || '';
     const isJson = contentType.includes('application/json');
@@ -291,7 +324,9 @@ export async function runPhotoOcr(
       const serverMsg =
         payload && typeof payload.error === 'string' && payload.error.trim()
           ? payload.error.trim()
-          : `사진 분석 서버 오류 (${response.status})`;
+          : response.status === 504
+            ? '사진 분석 서버 응답 시간이 초과되었습니다 (504). 잠시 후 다시 시도하거나 숫자를 직접 적어주세요.'
+            : `사진 분석 서버 오류 (${response.status})`;
       throw new Error(serverMsg);
     }
 
@@ -302,8 +337,21 @@ export async function runPhotoOcr(
     }
 
     const uprightRotateCw = normalizeRotateCw(payload.uprightRotateCw);
+    const detectedType: 'meter' | 'bill' =
+      payload.detectedType === 'bill'
+        ? 'bill'
+        : payload.detectedType === 'meter'
+          ? 'meter'
+          : kind === 'bill'
+            ? 'bill'
+            : 'meter';
 
     return {
+      detectedType,
+      meterDigitCount:
+        typeof payload.meterDigitCount === 'number'
+          ? payload.meterDigitCount
+          : null,
       amount: typeof payload.amount === 'number' ? payload.amount : null,
       usage: typeof payload.usage === 'number' ? payload.usage : null,
       billingYm: typeof payload.billingYm === 'string' ? payload.billingYm : null,
@@ -338,6 +386,7 @@ export async function runPhotoOcr(
             : '',
     };
   } finally {
+    window.clearTimeout(abortTimer);
     window.clearInterval(timer);
   }
 }

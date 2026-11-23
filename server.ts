@@ -4,7 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   analyzeWaterPhoto,
+  FALLBACK_GEMINI_MODEL,
+  maxDuration,
   OcrServiceError,
+  PRIMARY_GEMINI_MODEL,
   type OcrAnalyzeRequest,
 } from './api/ocr.ts';
 
@@ -26,6 +29,9 @@ async function startServer() {
     res.json({
       ok: true,
       hasApiKey: Boolean(key && key !== 'MY_GEMINI_API_KEY'),
+      primaryModel: PRIMARY_GEMINI_MODEL,
+      fallbackModel: FALLBACK_GEMINI_MODEL,
+      maxDuration,
     });
   });
 

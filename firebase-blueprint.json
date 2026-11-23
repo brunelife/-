@@ -54,7 +54,7 @@
         },
         "seededBase": {
           "type": "boolean",
-          "description": "Whether the initial 2021-2024 baseline records have been seeded"
+          "description": "Whether the initial 2021-2026 baseline records have been seeded"
         },
         "createdAt": {
           "type": "string",
@@ -151,7 +151,7 @@
         },
         "isBaseRecord": {
           "type": "boolean",
-          "description": "True for initial 2021-2024 historical ledger rows"
+          "description": "True for initial 2021-2026 historical ledger rows"
         },
         "createdAt": {
           "type": "string",

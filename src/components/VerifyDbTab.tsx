@@ -324,7 +324,7 @@ export function VerifyDbTab({
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="연월 검색 (예: 2024-03)"
+                placeholder="연월 검색 (예: 2026-10)"
                 className="w-full min-h-[46px] pl-10 pr-3.5 py-2 rounded-xl border border-[#CBD5E1] bg-[#FAFBFD] text-[15px] text-[#111827] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#155EEF] focus:bg-white"
               />
             </div>

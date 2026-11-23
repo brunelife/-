@@ -8,6 +8,7 @@ import {
   Loader2,
   Maximize2,
   RotateCcw,
+  RotateCw,
 } from 'lucide-react';
 import type { PhotoUploadState } from '../types/billing';
 
@@ -18,6 +19,7 @@ interface PhotoUploadCardProps {
   state: PhotoUploadState;
   onFileSelected: (file: File) => void;
   onClear: () => void;
+  onRotate: () => void;
   onZoom: (url: string, title: string) => void;
 }
 
@@ -28,6 +30,7 @@ export function PhotoUploadCard({
   state,
   onFileSelected,
   onClear,
+  onRotate,
   onZoom,
 }: PhotoUploadCardProps) {
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
@@ -111,14 +114,24 @@ export function PhotoUploadCard({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => onZoom(state.previewUrl!, label)}
-            className="w-full min-h-[46px] px-3 py-2 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[15px] font-bold text-[#111827] inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
-          >
-            <Maximize2 className="w-4 h-4 shrink-0" />
-            <span>사진 크게 보기</span>
-          </button>
+          <div className="grid grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              onClick={() => onZoom(state.previewUrl!, label)}
+              className="min-h-[46px] px-3 py-2 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[15px] font-bold text-[#111827] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              <Maximize2 className="w-4 h-4 shrink-0" />
+              <span>크게 보기</span>
+            </button>
+            <button
+              type="button"
+              onClick={onRotate}
+              className="min-h-[46px] px-3 py-2 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F8FAFC] text-[15px] font-bold text-[#111827] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              <RotateCw className="w-4 h-4 shrink-0" />
+              <span>사진 돌리기</span>
+            </button>
+          </div>
 
           <div className="grid grid-cols-2 gap-2.5">
             <button

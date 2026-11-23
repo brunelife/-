@@ -68,14 +68,20 @@ export interface SettlementInputs {
   prev202: string;
   curr202: string;
   accountInfo: string;
+  totalMeterReplaced?: boolean;
 }
 
 export interface SettlementCalculation {
   isReady: boolean;
+  allZeroUsage: boolean;
   uTot: number;
   u201: number;
   u202: number;
   uShop: number;
+  billedU201: number;
+  billedU202: number;
+  billedUShop: number;
+  addedUsage: number;
   billAmt: number;
   baseVol: number;
   unitPrice: number;
@@ -94,6 +100,15 @@ export interface SettlementCalculation {
   currTot: number;
   curr201: number;
   curr202: number;
+  meterReplacedApplied: boolean;
+}
+
+export interface SavedSettlementSnapshot {
+  recordId: string;
+  ym: string;
+  monthLabel: string;
+  accountInfo: string;
+  calc: SettlementCalculation;
 }
 
 export interface PhotoUploadState {
