@@ -1,19 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Calendar,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Copy,
   Eraser,
   Images,
   Loader2,
   Maximize2,
-  MessageSquare,
   Minus,
   Plus,
   RefreshCw,
@@ -31,7 +28,6 @@ import {
   type UnitKey,
 } from '../types/billing';
 import {
-  buildUnitMessages,
   formatKoreanReadableWon,
   formatUsage,
   formatWon,
@@ -42,6 +38,7 @@ import {
   type MeterPhotoKind,
 } from '../utils/meterMatcher';
 import { PhotoUploadCard } from './PhotoUploadCard';
+import { TenantMessageCards } from './TenantMessageCards';
 
 type WizardStep = 1 | 2 | 3;
 
@@ -151,11 +148,6 @@ export function SettlementTab({
   const bulkInputRef = useRef<HTMLInputElement | null>(null);
   const swappedSuggestion = detectSwappedMeterInputs(inputs);
   const [showExtraSettings, setShowExtraSettings] = useState(false);
-  const [editingUnit, setEditingUnit] = useState<UnitKey | null>(null);
-  const [customMessages, setCustomMessages] = useState<
-    Partial<Record<UnitKey, string>>
-  >({});
-  const [copiedUnit, setCopiedUnit] = useState<UnitKey | null>(null);
   const [doneUnits, setDoneUnits] = useState<Partial<Record<UnitKey, boolean>>>(
     {}
   );
@@ -168,25 +160,6 @@ export function SettlementTab({
   const activeAccountInfo = savedSnapshot
     ? savedSnapshot.accountInfo
     : inputs.accountInfo;
-
-  const autoMessages = buildUnitMessages(
-    activeMonthLabel,
-    activeAccountInfo,
-    activeCalc
-  );
-
-  useEffect(() => {
-    setCustomMessages({});
-  }, [
-    activeMonthLabel,
-    activeAccountInfo,
-    activeCalc.billedU201,
-    activeCalc.billedU202,
-    activeCalc.billedUShop,
-    activeCalc.a201,
-    activeCalc.a202,
-    activeCalc.aShop,
-  ]);
 
   const goToStep = (next: WizardStep) => {
     setStep(next);
@@ -204,34 +177,7 @@ export function SettlementTab({
     }
   };
 
-  const getMessageValue = (unit: UnitKey) =>
-    customMessages[unit] !== undefined
-      ? customMessages[unit]!
-      : autoMessages[unit];
-
-  const handleCopy = async (unit: UnitKey) => {
-    const text = getMessageValue(unit);
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
-    setCopiedUnit(unit);
-    setDoneUnits((prev) => ({ ...prev, [unit]: true }));
-    onCopyFeedback(`${unit} 문자를 복사했어요! 카톡이나 문자에 붙여넣기 하세요.`);
-    window.setTimeout(() => {
-      setCopiedUnit((prev) => (prev === unit ? null : prev));
-    }, 2000);
-  };
-
-  const handleSmsClick = (unit: UnitKey) => {
+  const handleMarkUnitDone = (unit: UnitKey) => {
     setDoneUnits((prev) => ({ ...prev, [unit]: true }));
   };
 
@@ -268,32 +214,6 @@ export function SettlementTab({
         ? 'border-[#155EEF] bg-[#EEF4FF]'
         : 'border-[#CBD5E1] bg-[#FAFBFD]'
     }`;
-
-  const unitRows: Array<{
-    unit: UnitKey;
-    usage: number;
-    measuredUsage: number;
-    amount: number;
-  }> = [
-    {
-      unit: '201호',
-      usage: activeCalc.billedU201,
-      measuredUsage: activeCalc.u201,
-      amount: activeCalc.a201,
-    },
-    {
-      unit: '202호',
-      usage: activeCalc.billedU202,
-      measuredUsage: activeCalc.u202,
-      amount: activeCalc.a202,
-    },
-    {
-      unit: '상가',
-      usage: activeCalc.billedUShop,
-      measuredUsage: activeCalc.uShop,
-      amount: activeCalc.aShop,
-    },
-  ];
 
   const doneCount = (['201호', '202호', '상가'] as UnitKey[]).filter((u) =>
     Boolean(doneUnits[u])
@@ -1278,165 +1198,14 @@ export function SettlementTab({
                 </div>
               )}
 
-              {/* Total Summary Card */}
-              <section className="bg-white border-2 border-[#DCE3EC] rounded-2xl p-5 space-y-1.5">
-                <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-lg font-extrabold text-[#111827]">
-                    {activeMonthLabel} 최종 합계
-                  </span>
-                  <span className="font-mono tabular-nums text-[28px] sm:text-[30px] font-extrabold text-[#047857]">
-                    {formatWon(activeCalc.finalSum)}
-                  </span>
-                </div>
-                <p className="text-[15px] font-semibold text-[#475569] leading-relaxed tabular-nums">
-                  고지서 {formatWon(activeCalc.billAmt)} · 기본 합계{' '}
-                  {formatWon(activeCalc.baseSum)}
-                  {activeCalc.added > 0
-                    ? ` · 부족분 ${formatWon(activeCalc.added)}${activeCalc.addedUsage > 0 ? ` (+${formatUsage(activeCalc.addedUsage)}㎥)` : ''}은 ${activeCalc.widest}에 자동 반영됨`
-                    : ' · 추가 보정 없음'}
-                </p>
-              </section>
-
-              {/* Tenant Cards: 201호, 202호, 상가 */}
-              <div className="space-y-4">
-                {unitRows.map(({ unit, usage, measuredUsage, amount }) => {
-                  const msg = getMessageValue(unit);
-                  const isCopied = copiedUnit === unit;
-                  const isDone = Boolean(doneUnits[unit]);
-                  const isEditing = editingUnit === unit;
-                  const isAdjusted =
-                    activeCalc.added > 0 && activeCalc.widest === unit;
-                  const adjustLabel =
-                    activeCalc.added > 500 ? '부족분 보정' : '반올림 부족분';
-
-                  return (
-                    <section
-                      key={unit}
-                      className={`bg-white rounded-2xl border-2 p-5 space-y-4 transition-colors ${
-                        isDone ? 'border-[#16A34A]' : 'border-[#DCE3EC]'
-                      }`}
-                    >
-                      <div className="flex items-baseline justify-between gap-3">
-                        <div>
-                          <div className="flex items-baseline gap-2.5 flex-wrap">
-                            <h3 className="text-2xl font-extrabold text-[#111827]">
-                              {unit}
-                            </h3>
-                            <span className="text-base font-bold font-mono tabular-nums text-[#475569]">
-                              {formatUsage(usage)}㎥ 사용
-                            </span>
-                          </div>
-                          {isAdjusted && (
-                            <p className="text-sm font-bold text-[#155EEF] mt-0.5 tabular-nums">
-                              {activeCalc.addedUsage > 0
-                                ? `${adjustLabel} +${formatUsage(activeCalc.addedUsage)}㎥ (+${formatWon(activeCalc.added)}) 반영 · 실측 ${formatUsage(measuredUsage)}㎥`
-                                : `${adjustLabel} +${formatWon(activeCalc.added)} 포함`}
-                            </p>
-                          )}
-                          {isDone && (
-                            <p className="text-sm font-bold text-[#047857] mt-0.5 inline-flex items-center gap-1">
-                              <Check className="w-4 h-4" />
-                              <span>복사/발송 확인됨</span>
-                            </p>
-                          )}
-                        </div>
-                        <span className="font-mono tabular-nums text-[28px] sm:text-[30px] font-extrabold text-[#155EEF] shrink-0">
-                          {formatWon(amount)}
-                        </span>
-                      </div>
-
-                      {/* Message Preview or Edit Box */}
-                      {isEditing ? (
-                        <div className="space-y-2">
-                          <textarea
-                            rows={4}
-                            value={msg}
-                            onChange={(e) =>
-                              setCustomMessages((prev) => ({
-                                ...prev,
-                                [unit]: e.target.value,
-                              }))
-                            }
-                            className="w-full p-3.5 rounded-xl border-2 border-[#155EEF] bg-white text-[17px] leading-relaxed text-[#111827] focus:outline-none"
-                          />
-                          <div className="flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setCustomMessages((prev) => {
-                                  const next = { ...prev };
-                                  delete next[unit];
-                                  return next;
-                                })
-                              }
-                              className="min-h-[40px] px-3 rounded-lg text-sm font-bold text-[#475569] hover:bg-[#F1F5F9] inline-flex items-center gap-1 cursor-pointer"
-                            >
-                              <RotateCcw className="w-4 h-4" />
-                              <span>원래 문구로</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingUnit(null)}
-                              className="min-h-[40px] px-4 rounded-lg bg-[#111827] text-white text-sm font-bold cursor-pointer"
-                            >
-                              수정 완료
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="rounded-xl bg-[#F1F5F9] border border-[#DCE3EC] p-4 space-y-2">
-                          <p className="text-[17px] leading-relaxed text-[#111827] whitespace-pre-line font-medium">
-                            {msg}
-                          </p>
-                          <div className="flex justify-end">
-                            <button
-                              type="button"
-                              onClick={() => setEditingUnit(unit)}
-                              className="text-sm font-bold text-[#155EEF] hover:underline cursor-pointer"
-                            >
-                              문구 직접 고치기
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Two Clear Senior-Friendly Send Actions */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(unit)}
-                          className={`w-full min-h-[56px] px-4 py-3 rounded-xl text-base sm:text-lg font-extrabold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap cursor-pointer ${
-                            isCopied
-                              ? 'bg-[#047857] text-white'
-                              : 'bg-[#111827] hover:bg-[#1E293B] text-white'
-                          }`}
-                        >
-                          {isCopied ? (
-                            <>
-                              <Check className="w-5 h-5 shrink-0" />
-                              <span>복사 완료! (카톡 붙여넣기)</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-5 h-5 shrink-0" />
-                              <span>{unit} 문자 복사 (카톡용)</span>
-                            </>
-                          )}
-                        </button>
-
-                        <a
-                          href={`sms:?&body=${encodeURIComponent(msg)}`}
-                          onClick={() => handleSmsClick(unit)}
-                          className="w-full min-h-[56px] px-4 py-3 rounded-xl border-2 border-[#155EEF] bg-[#EEF4FF] hover:bg-[#DCE8FF] text-[#1048B8] text-base sm:text-lg font-extrabold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
-                        >
-                          <MessageSquare className="w-5 h-5 shrink-0" />
-                          <span>문자 앱 바로 열기</span>
-                        </a>
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
+              <TenantMessageCards
+                monthLabel={activeMonthLabel}
+                accountInfo={activeAccountInfo}
+                calc={activeCalc}
+                doneUnits={doneUnits}
+                onMarkDone={handleMarkUnitDone}
+                onCopyFeedback={onCopyFeedback}
+              />
 
               {/* Bottom Actions: Back to Edit or Explicitly Start Fresh Next Month */}
               <div className="pt-2 space-y-2.5">
@@ -1446,7 +1215,6 @@ export function SettlementTab({
                     onClick={() => {
                       onStartNewSettlement();
                       setDoneUnits({});
-                      setCustomMessages({});
                       goToStep(1);
                     }}
                     className="w-full min-h-[56px] px-5 py-3.5 rounded-2xl bg-[#111827] hover:bg-[#1E293B] text-white text-lg font-extrabold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"

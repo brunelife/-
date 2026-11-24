@@ -310,6 +310,130 @@ export function calculateSettlement(
   };
 }
 
+export function buildCalculationFromRecord(
+  record: BillingRecord
+): SettlementCalculation {
+  const billAmt = record.billAmount ?? 0;
+  const uTot = record.usageTotal;
+  const u201 = record.usage201;
+  const u202 = record.usage202;
+  const uShop = record.usageShop;
+  const baseVol =
+    record.billUsage != null && record.billUsage > 0 ? record.billUsage : uTot;
+
+  const isReady = billAmt > 0 && baseVol > 0;
+  const widest: UnitKey = record.adjustmentTarget ?? '상가';
+
+  if (!isReady) {
+    return {
+      isReady: false,
+      allZeroUsage: false,
+      uTot,
+      u201,
+      u202,
+      uShop,
+      billedU201: u201,
+      billedU202: u202,
+      billedUShop: uShop,
+      addedUsage: 0,
+      billAmt,
+      baseVol,
+      unitPrice: 0,
+      base201: 0,
+      base202: 0,
+      baseShop: 0,
+      a201: 0,
+      a202: 0,
+      aShop: 0,
+      baseSum: 0,
+      shortfall: 0,
+      widest,
+      added: 0,
+      finalSum: record.finalAmtSum ?? 0,
+      warnings: [],
+      currTot: record.currTotal ?? 0,
+      curr201: record.curr201 ?? 0,
+      curr202: record.curr202 ?? 0,
+      meterReplacedApplied: false,
+    };
+  }
+
+  const unitPrice = billAmt / baseVol;
+  const base201 = mround500(unitPrice * u201);
+  const base202 = mround500(unitPrice * u202);
+  const baseShop = mround500(unitPrice * uShop);
+  const baseSum = base201 + base202 + baseShop;
+  const shortfall = billAmt - baseSum;
+
+  const added =
+    record.addedAmount !== null
+      ? record.addedAmount
+      : shortfall > 0
+        ? ceil500(shortfall)
+        : 0;
+
+  let a201 = base201;
+  let a202 = base202;
+  let aShop = baseShop;
+  let billedU201 = u201;
+  let billedU202 = u202;
+  let billedUShop = uShop;
+  let addedUsage = 0;
+
+  if (added > 0) {
+    if (widest === '201호') {
+      a201 += added;
+      const targetU = Math.max(u201, round1(a201 / unitPrice));
+      addedUsage = round1(targetU - u201);
+      billedU201 = targetU;
+    } else if (widest === '202호') {
+      a202 += added;
+      const targetU = Math.max(u202, round1(a202 / unitPrice));
+      addedUsage = round1(targetU - u202);
+      billedU202 = targetU;
+    } else {
+      aShop += added;
+      const targetU = Math.max(uShop, round1(aShop / unitPrice));
+      addedUsage = round1(targetU - uShop);
+      billedUShop = targetU;
+    }
+  }
+
+  const finalSum = a201 + a202 + aShop;
+
+  return {
+    isReady: true,
+    allZeroUsage: false,
+    uTot,
+    u201,
+    u202,
+    uShop,
+    billedU201,
+    billedU202,
+    billedUShop,
+    addedUsage,
+    billAmt,
+    baseVol,
+    unitPrice,
+    base201,
+    base202,
+    baseShop,
+    a201,
+    a202,
+    aShop,
+    baseSum,
+    shortfall,
+    widest,
+    added,
+    finalSum,
+    warnings: [],
+    currTot: record.currTotal ?? 0,
+    curr201: record.curr201 ?? 0,
+    curr202: record.curr202 ?? 0,
+    meterReplacedApplied: false,
+  };
+}
+
 export function buildUnitMessages(
   monthLabel: string,
   accountInfo: string,

@@ -1249,9 +1249,11 @@ function WaterBillingApp() {
             </div>
             <VerifyDbTab
               records={records}
+              accountInfo={settings.accountInfo}
               loading={cloudLoading}
               onDeleteRecord={(rec) => setDeleteTarget(rec)}
               onRequestReset={() => setResetDialogOpen(true)}
+              onCopyFeedback={(msg) => showToast(msg, 'success')}
             />
           </div>
         )}

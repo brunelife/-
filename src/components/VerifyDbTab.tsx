@@ -1,37 +1,75 @@
 import { useMemo, useState } from 'react';
 import {
+  ArrowLeft,
   Download,
   FileSpreadsheet,
+  MessageSquare,
   RotateCcw,
   Search,
   Trash2,
 } from 'lucide-react';
 import type { BillingRecord, UnitKey } from '../types/billing';
 import {
+  buildCalculationFromRecord,
   computeStats,
   exportRecordsAsCsv,
   exportRecordsAsJson,
   formatUsage,
+  ymToKoreanLabel,
 } from '../utils/billingMath';
+import { TenantMessageCards } from './TenantMessageCards';
 
 interface VerifyDbTabProps {
   records: BillingRecord[];
+  accountInfo: string;
   loading: boolean;
   onDeleteRecord: (record: BillingRecord) => void;
   onRequestReset: () => void;
+  onCopyFeedback: (msg: string) => void;
 }
 
 const UNIT_ORDER: UnitKey[] = ['201호', '202호', '상가'];
 
 export function VerifyDbTab({
   records,
+  accountInfo,
   loading,
   onDeleteRecord,
   onRequestReset,
+  onCopyFeedback,
 }: VerifyDbTabProps) {
   const [selectedYear, setSelectedYear] = useState<string>('전체');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [sortDesc, setSortDesc] = useState<boolean>(true);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [doneUnits, setDoneUnits] = useState<Partial<Record<UnitKey, boolean>>>(
+    {}
+  );
+
+  const selectedRecord = useMemo(
+    () =>
+      selectedRecordId
+        ? records.find((r) => r.id === selectedRecordId) ?? null
+        : null,
+    [records, selectedRecordId]
+  );
+
+  const replayCalc = useMemo(
+    () => (selectedRecord ? buildCalculationFromRecord(selectedRecord) : null),
+    [selectedRecord]
+  );
+
+  const handleOpenRecordMessages = (record: BillingRecord) => {
+    setSelectedRecordId(record.id);
+    setDoneUnits({});
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCloseRecordMessages = () => {
+    setSelectedRecordId(null);
+    setDoneUnits({});
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const { stats, widest } = useMemo(() => computeStats(records), [records]);
 
@@ -79,6 +117,69 @@ export function VerifyDbTab({
     }
     return Math.ceil(m / 5) * 5;
   }, [chartRecords]);
+
+  if (selectedRecord && replayCalc) {
+    const replayMonthLabel =
+      selectedRecord.monthLabel?.trim() || ymToKoreanLabel(selectedRecord.ym);
+    const doneCount = (['201호', '202호', '상가'] as UnitKey[]).filter((u) =>
+      Boolean(doneUnits[u])
+    ).length;
+
+    return (
+      <div className="max-w-3xl mx-auto space-y-4">
+        <button
+          type="button"
+          onClick={handleCloseRecordMessages}
+          className="w-full min-h-[54px] px-4 py-3 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[#111827] text-base sm:text-lg font-extrabold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+        >
+          <ArrowLeft className="w-5 h-5 shrink-0" />
+          <span>지난 기록 목록으로 돌아가기</span>
+        </button>
+
+        <div className="rounded-2xl bg-[#EEF4FF] border-2 border-[#93C5FD] p-4 sm:p-5 space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-6 h-6 text-[#155EEF] shrink-0" />
+              <h2 className="text-lg sm:text-xl font-extrabold text-[#1048B8]">
+                {replayMonthLabel} 정산 문자 다시 보내기
+              </h2>
+            </div>
+            <span className="text-sm font-extrabold font-mono tabular-nums text-[#155EEF]">
+              {doneCount === 3
+                ? '3곳 모두 발송 완료!'
+                : `문자 발송 ${doneCount}/3곳`}
+            </span>
+          </div>
+          <p className="text-[15px] text-[#1E3A8A] leading-relaxed">
+            저장된 기록({selectedRecord.ym})의 정산 금액과 문자를 그대로
+            불러왔어요. 못 보낸 곳만 골라서 복사하거나 문자를 보내세요.
+          </p>
+        </div>
+
+        <TenantMessageCards
+          monthLabel={replayMonthLabel}
+          accountInfo={accountInfo}
+          calc={replayCalc}
+          doneUnits={doneUnits}
+          onMarkDone={(unit) =>
+            setDoneUnits((prev) => ({ ...prev, [unit]: true }))
+          }
+          onCopyFeedback={onCopyFeedback}
+        />
+
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={handleCloseRecordMessages}
+            className="w-full min-h-[54px] px-4 py-3 rounded-xl border-2 border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[#334155] text-base font-extrabold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-5 h-5 shrink-0" />
+            <span>지난 기록 목록으로 돌아가기</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -268,7 +369,7 @@ export function VerifyDbTab({
                 지난 정산 장부 ({filteredRecords.length}건)
               </h2>
               <p className="text-[15px] text-[#475569] mt-0.5">
-                2021년 5월부터 저장된 월별 수도세 정산 내역입니다
+                회차를 누르면 201호 · 202호 · 상가 문자 보내기 화면을 다시 열 수 있어요
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -367,6 +468,9 @@ export function VerifyDbTab({
                       </span>
                     </button>
                   </th>
+                  <th className="py-3.5 px-3 text-left font-extrabold whitespace-nowrap">
+                    문자
+                  </th>
                   <th className="py-3.5 px-4 text-right font-extrabold whitespace-nowrap">
                     고지서 (원)
                   </th>
@@ -391,7 +495,8 @@ export function VerifyDbTab({
                 {filteredRecords.map((r) => (
                   <tr
                     key={r.id}
-                    className="hover:bg-[#F8FAFC] transition-colors"
+                    onClick={() => handleOpenRecordMessages(r)}
+                    className="hover:bg-[#EEF4FF]/60 transition-colors cursor-pointer"
                   >
                     <td className="py-3.5 px-4 text-left font-bold text-[#111827] whitespace-nowrap">
                       <span>{r.ym}</span>
@@ -400,6 +505,19 @@ export function VerifyDbTab({
                           신규
                         </span>
                       )}
+                    </td>
+                    <td className="py-3.5 px-3 text-left font-sans whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenRecordMessages(r);
+                        }}
+                        className="min-h-[38px] px-3 py-1.5 rounded-lg bg-[#EEF4FF] hover:bg-[#DCE8FF] text-[#1048B8] text-sm font-extrabold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <MessageSquare className="w-4 h-4 shrink-0" />
+                        <span>문자 보기</span>
+                      </button>
                     </td>
                     <td className="py-3.5 px-4 text-right text-[#334155] whitespace-nowrap">
                       {r.billAmount != null
@@ -435,7 +553,10 @@ export function VerifyDbTab({
                       {!r.isBaseRecord ? (
                         <button
                           type="button"
-                          onClick={() => onDeleteRecord(r)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteRecord(r);
+                          }}
                           aria-label={`${r.ym} 기록 삭제`}
                           className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl text-[#64748B] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition-colors cursor-pointer"
                         >
